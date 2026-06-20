@@ -161,10 +161,16 @@ pub fn focus_window(id: u64) -> Result<(), String> {
 /// workspaces across monitors.
 pub fn rename_focused_workspace(name: &str) -> Result<(), String> {
     if name.is_empty() {
-        action(&["unset-workspace-name"])
-    } else {
-        action(&["set-workspace-name", name])
+        return action(&["unset-workspace-name"]);
     }
+    // niri ignores `set-workspace-name` when the new name matches the current
+    // one case-insensitively, so a case-only edit (`Foo` -> `foo`) would be
+    // dropped. Force it through a throwaway intermediate name that differs
+    // either way (a zero-width space prefix). The workspace stays named the
+    // whole time, so niri never reclaims it mid-rename.
+    let scratch = format!("\u{200b}{name}");
+    let _ = action(&["set-workspace-name", &scratch]);
+    action(&["set-workspace-name", name])
 }
 
 /// Move the column containing `window_id` left or right within its workspace.

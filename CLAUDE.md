@@ -45,6 +45,13 @@ readline-style (Emacs) bindings: `C-a`/`C-e` start/end, `C-b`/`C-f` char,
 plus arrows/Home/End/Delete. There's no separate manual-refresh key — the 800ms
 timer keeps the map current.
 
+niri's `set-workspace-name` is a **case-insensitive no-op** — setting `foo` over
+`Foo` does nothing, so a case-only edit would silently fail. `rename_focused_workspace`
+works around this by first setting a throwaway intermediate name (a zero-width-space
+prefix) and then the real one, which forces the change through. I avoid the simpler
+unset-then-set because unsetting an empty workspace's name can let niri reclaim it
+mid-rename.
+
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so
 niri reclaims the now-empty (formerly named) workspace instead of leaving it
