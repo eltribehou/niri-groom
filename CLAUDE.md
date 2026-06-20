@@ -31,10 +31,15 @@ workspace or a single window from the keyboard with no confirmation.
 | `Shift+H`      | Move the selected window's column left within the workspace |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `Enter`        | Focus the selected workspace and dismiss the overlay |
+| `r`            | Rename the selected workspace (inline text field) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
 | `x`            | Kill the selected window — no confirm     |
-| `r`            | Force a refresh                          |
 | `q` / `Esc`    | Quit                                     |
+
+While the rename field is open the whole keyboard feeds the edit buffer:
+`Enter` commits (`set-workspace-name`, or `unset-workspace-name` if left empty),
+`Esc` cancels, `Backspace` deletes. There's no separate manual-refresh key — the
+800ms timer keeps the map current.
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so

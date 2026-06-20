@@ -43,6 +43,8 @@ struct State {
     sel_nav: usize,
     /// Index into the selected workspace's `windows`.
     sel_win: usize,
+    /// When renaming, the in-overlay edit buffer for the selected workspace.
+    editing: Option<String>,
     error: Option<String>,
 }
 
@@ -179,6 +181,7 @@ fn build_ui(app: &Application) {
         model,
         sel_nav: 0,
         sel_win: 0,
+        editing: None,
         error: None,
     }));
     // Open the overlay on the currently focused workspace.
@@ -255,16 +258,95 @@ fn build_ui(app: &Application) {
     }
 }
 
+/// Snapshot the compositor's focused window and workspace, so an operation that
+/// must change focus (rename, move) can restore it afterwards.
+fn capture_focus() -> (Option<u64>, Option<u64>) {
+    let win = niri::fetch_windows()
+        .ok()
+        .and_then(|ws| ws.into_iter().find(|w| w.is_focused).map(|w| w.id));
+    let ws = niri::fetch_workspaces()
+        .ok()
+        .and_then(|wss| wss.into_iter().find(|w| w.is_focused).map(|w| w.id));
+    (win, ws)
+}
+
+fn restore_focus((prev_win, prev_ws): (Option<u64>, Option<u64>)) {
+    if let Some(id) = prev_win {
+        let _ = niri::focus_window(id);
+    } else if let Some(id) = prev_ws {
+        let _ = niri::focus_workspace_by_id(id);
+    }
+}
+
+/// Handle a keystroke while the rename text field is open. Esc cancels, Enter
+/// commits, Backspace deletes, and any printable character is appended.
+fn handle_edit_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>) -> bool {
+    match *keyval {
+        gdk::Key::Escape => {
+            state.borrow_mut().editing = None;
+            true
+        }
+        gdk::Key::Return | gdk::Key::KP_Enter => {
+            let (target, name) = {
+                let s = state.borrow();
+                (s.selected_ws_id(), s.editing.clone().unwrap_or_default())
+            };
+            if let Some(id) = target {
+                // Renaming acts on the focused workspace, so focus it, rename,
+                // then put focus back where the user left it.
+                let focus = capture_focus();
+                if niri::focus_workspace_by_id(id).is_ok() {
+                    let _ = niri::rename_focused_workspace(name.trim());
+                }
+                restore_focus(focus);
+            }
+            state.borrow_mut().editing = None;
+            refresh(state);
+            true
+        }
+        gdk::Key::BackSpace => {
+            if let Some(buf) = state.borrow_mut().editing.as_mut() {
+                buf.pop();
+            }
+            true
+        }
+        _ => {
+            if let Some(ch) = keyval.to_unicode() {
+                if !ch.is_control() {
+                    if let Some(buf) = state.borrow_mut().editing.as_mut() {
+                        buf.push(ch);
+                    }
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
 /// Returns true if the key changed something and a redraw is wanted.
 fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) -> bool {
+    // While renaming, the whole keyboard feeds the edit buffer.
+    if state.borrow().editing.is_some() {
+        return handle_edit_key(keyval, state);
+    }
+
     let ch = keyval.to_unicode();
     match (ch, *keyval) {
         (Some('q'), _) | (_, gdk::Key::Escape) => {
             app.quit();
             false
         }
+        // Rename the selected workspace (edit inline; the auto-refresh timer
+        // keeps the map current, so there's no separate manual-refresh key).
         (Some('r'), _) => {
-            refresh(state);
+            let name = state
+                .borrow()
+                .sel_ws()
+                .map(|ws| ws.ws.name.clone().unwrap_or_default());
+            if let Some(name) = name {
+                state.borrow_mut().editing = Some(name);
+            }
             true
         }
         // Focus the selected workspace and dismiss the overlay (jump to it).
@@ -349,17 +431,10 @@ fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
             .and_then(|v| v.ws.output.clone().map(|o| (o, v.ws.idx)))
     };
     if let Some((output, idx)) = target {
-        // Remember the compositor's focused workspace; moving requires focusing,
-        // so I restore it afterwards to leave focus where the user left it.
-        let prev_focus = niri::fetch_workspaces()
-            .ok()
-            .and_then(|wss| wss.into_iter().find(|w| w.is_focused).map(|w| w.id));
-
+        // Moving requires focusing, so restore focus afterwards.
+        let focus = capture_focus();
         let _ = niri::move_workspace(&output, idx, down);
-
-        if let Some(id) = prev_focus {
-            let _ = niri::focus_workspace_by_id(id);
-        }
+        restore_focus(focus);
         refresh(state);
         true
     } else {
@@ -376,22 +451,10 @@ fn move_selected_column(state: &Rc<RefCell<State>>, right: bool) -> bool {
         None => return false,
     };
 
-    // Remember the compositor's focused window (or workspace, if none) so the
-    // move doesn't leave focus somewhere the user didn't ask for.
-    let prev_win = niri::fetch_windows()
-        .ok()
-        .and_then(|ws| ws.into_iter().find(|w| w.is_focused).map(|w| w.id));
-    let prev_ws = niri::fetch_workspaces()
-        .ok()
-        .and_then(|wss| wss.into_iter().find(|w| w.is_focused).map(|w| w.id));
-
+    // Moving requires focusing a window in the column, so restore focus after.
+    let focus = capture_focus();
     let _ = niri::move_column(win_id, right);
-
-    if let Some(id) = prev_win {
-        let _ = niri::focus_window(id);
-    } else if let Some(id) = prev_ws {
-        let _ = niri::focus_workspace_by_id(id);
-    }
+    restore_focus(focus);
     refresh(state);
     true
 }
@@ -543,6 +606,41 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
             draw_workspace(cr, ox, wy, col_w, ws_h, wsv, ws_selected, state.sel_win);
         }
     }
+
+    if let Some(buf) = &state.editing {
+        draw_rename(cr, w, h, buf);
+    }
+}
+
+/// A centered modal text field for renaming the selected workspace.
+fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, buf: &str) {
+    // Dim everything behind the field.
+    set_rgba(cr, 0.0, 0.0, 0.0, 0.45);
+    cr.rectangle(0.0, 0.0, w, h);
+    let _ = cr.fill();
+
+    let bw = (w * 0.5).min(560.0).max(320.0);
+    let bh = 92.0;
+    let bx = (w - bw) / 2.0;
+    let by = (h - bh) / 2.0;
+
+    set_rgba(cr, 0.12, 0.14, 0.20, 0.98);
+    cr.rectangle(bx, by, bw, bh);
+    let _ = cr.fill();
+    set_rgba(cr, 0.30, 0.66, 1.0, 1.0);
+    cr.set_line_width(2.0);
+    cr.rectangle(bx, by, bw, bh);
+    let _ = cr.stroke();
+
+    set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
+    cr.set_font_size(12.0);
+    text_at(cr, bx + 16.0, by + 24.0, "Rename workspace  (Enter: confirm · Esc: cancel · empty: unset)");
+
+    // The buffer plus a block cursor.
+    set_rgba(cr, 0.95, 0.96, 0.99, 1.0);
+    cr.set_font_size(20.0);
+    let shown = fit_text(cr, &format!("{buf}_"), bw - 32.0);
+    text_at(cr, bx + 16.0, by + 60.0, &shown);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -689,7 +787,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k ws · J/K move ws · h/l win · H/L move col · Tab screen · Enter focus · w kill ws · x kill win · r refresh · q quit";
+    let help = "j/k ws · J/K move ws · h/l win · H/L move col · Tab screen · Enter focus · r rename · w kill ws · x kill win · q quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }

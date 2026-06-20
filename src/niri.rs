@@ -155,6 +155,18 @@ pub fn focus_window(id: u64) -> Result<(), String> {
     action(&["focus-window", "--id", &id.to_string()])
 }
 
+/// Rename the *focused* workspace. An empty name unsets it (so niri reclaims an
+/// emptied workspace). I focus the target workspace before calling this, since
+/// `set-workspace-name`'s `--workspace` reference can't disambiguate unnamed
+/// workspaces across monitors.
+pub fn rename_focused_workspace(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        action(&["unset-workspace-name"])
+    } else {
+        action(&["set-workspace-name", name])
+    }
+}
+
 /// Move the column containing `window_id` left or right within its workspace.
 /// `move-column-left`/`-right` act on the focused column, so I focus a window
 /// in the column first. niri clamps the move at the ends of the workspace.
