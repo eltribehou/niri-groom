@@ -267,6 +267,14 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
             refresh(state);
             true
         }
+        // Focus the selected workspace and dismiss the overlay (jump to it).
+        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => {
+            if let Some(id) = state.borrow().selected_ws_id() {
+                let _ = niri::focus_workspace_by_id(id);
+            }
+            app.quit();
+            false
+        }
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
@@ -649,7 +657,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k: workspace   J/K: move workspace   h/l: window   Tab: screen   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
+    let help = "j/k: workspace   J/K: move workspace   h/l: window   Tab: screen   Enter: focus   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }

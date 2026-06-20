@@ -28,6 +28,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `l` / `Right`  | Select next window in the workspace       |
 | `h` / `Left`   | Select previous window                   |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
+| `Enter`        | Focus the selected workspace and dismiss the overlay |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
 | `x`            | Kill the selected window — no confirm     |
 | `r`            | Force a refresh                          |

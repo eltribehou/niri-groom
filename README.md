@@ -15,6 +15,7 @@ whole workspace or a single window from the keyboard, instantly.
 | `J` / `K`       | **Move** the selected workspace down / up within its monitor |
 | `h` / `l`       | Select previous / next **window**            |
 | `Tab` / `S-Tab` | Jump to the next / previous **screen**       |
+| `Enter`         | **Focus** the selected workspace and close the overlay |
 | `w`             | Kill the selected workspace (all its windows) |
 | `x`             | Kill the selected window                     |
 | `r`             | Refresh                                      |
