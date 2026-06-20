@@ -9,16 +9,18 @@ whole workspace or a single window from the keyboard, instantly.
 
 ## Keys
 
-| Key           | Action                                       |
-| ------------- | -------------------------------------------- |
-| `j` / `k`     | Select next / previous **workspace**         |
-| `h` / `l`     | Select previous / next **window**            |
-| `w`           | Kill the selected workspace (all its windows) |
-| `x`           | Kill the selected window                     |
-| `r`           | Refresh                                      |
-| `q` / `Esc`   | Quit                                         |
+| Key             | Action                                       |
+| --------------- | -------------------------------------------- |
+| `j` / `k`       | Select next / previous **workspace** (crosses screens at the boundary) |
+| `h` / `l`       | Select previous / next **window**            |
+| `Tab` / `S-Tab` | Jump to the next / previous **screen**       |
+| `w`             | Kill the selected workspace (all its windows) |
+| `x`             | Kill the selected window                     |
+| `r`             | Refresh                                      |
+| `q` / `Esc`     | Quit                                         |
 
-There is **no confirmation** — `w` and `x` kill immediately.
+There is **no confirmation** — `w` and `x` kill immediately. Killing a workspace
+also drops its name so niri reclaims the empty workspace.
 
 ## Run
 
@@ -35,4 +37,5 @@ nix build          # → ./result/bin/niri-groom
 For development, `nix develop` drops you into a shell with `cargo`, or use
 [direnv](https://direnv.net/) (`direnv allow`) to load it automatically.
 
-See [CLAUDE.md](./CLAUDE.md) for architecture and dev notes.
+To install it permanently (e.g. via home-manager) and bind it to a niri key, see
+the deployment notes in [CLAUDE.md](./CLAUDE.md#deploying-with-home-manager).

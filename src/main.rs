@@ -62,6 +62,21 @@ impl State {
             .and_then(|v| v.windows.get(self.sel_win))
             .map(|w| w.id)
     }
+
+    /// The nav index of niri's focused workspace, so I can open the overlay
+    /// where the user is actually looking (defaults to the first workspace).
+    fn focused_nav(&self) -> usize {
+        self.model
+            .nav
+            .iter()
+            .position(|&(o, w)| self.model.outputs[o].workspaces[w].ws.is_focused)
+            .unwrap_or(0)
+    }
+
+    /// Output index of the current selection.
+    fn sel_output(&self) -> usize {
+        self.model.nav.get(self.sel_nav).map(|&(o, _)| o).unwrap_or(0)
+    }
 }
 
 /// Build the model from a fresh niri snapshot.
@@ -166,6 +181,11 @@ fn build_ui(app: &Application) {
         sel_win: 0,
         error: None,
     }));
+    // Open the overlay on the currently focused workspace.
+    {
+        let mut s = state.borrow_mut();
+        s.sel_nav = s.focused_nav();
+    }
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -247,12 +267,16 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
             refresh(state);
             true
         }
-        // Workspace navigation (vertical).
+        // Workspace navigation (vertical); crosses to the adjacent screen at
+        // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
         (Some('k'), _) | (_, gdk::Key::Up) => move_ws(state, -1),
         // Window navigation (horizontal, within workspace).
         (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, 1),
         (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, -1),
+        // Jump straight to the next/previous screen (output).
+        (_, gdk::Key::Tab) => move_output(state, 1),
+        (_, gdk::Key::ISO_Left_Tab) => move_output(state, -1),
         // Kill the selected window.
         (Some('x'), _) => {
             let id = state.borrow().selected_win_id();
@@ -262,15 +286,21 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
             }
             true
         }
-        // Kill the whole selected workspace (all its windows).
+        // Kill the whole selected workspace: close every window, then drop the
+        // workspace name so niri reclaims the now-empty workspace.
         (Some('w'), _) => {
-            let ids: Vec<u64> = state
-                .borrow()
-                .sel_ws()
-                .map(|v| v.windows.iter().map(|w| w.id).collect())
-                .unwrap_or_default();
+            let (ids, name): (Vec<u64>, Option<String>) = {
+                let s = state.borrow();
+                match s.sel_ws() {
+                    Some(v) => (v.windows.iter().map(|w| w.id).collect(), v.ws.name.clone()),
+                    None => (Vec::new(), None),
+                }
+            };
             for id in ids {
                 let _ = niri::close_window(id);
+            }
+            if let Some(name) = name.filter(|n| !n.is_empty()) {
+                let _ = niri::unset_workspace_name(&name);
             }
             refresh(state);
             true
@@ -294,6 +324,26 @@ fn move_ws(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     } else {
         false
     }
+}
+
+/// Jump the selection to the first workspace of the next/previous output,
+/// wrapping around. With two screens this just toggles between them.
+fn move_output(state: &Rc<RefCell<State>>, delta: i32) -> bool {
+    let mut s = state.borrow_mut();
+    let n_out = s.model.outputs.len();
+    if n_out < 2 {
+        return false;
+    }
+    let cur = s.sel_output();
+    let next = ((cur as i32 + delta).rem_euclid(n_out as i32)) as usize;
+    if let Some(idx) = s.model.nav.iter().position(|&(o, _)| o == next) {
+        if idx != s.sel_nav {
+            s.sel_nav = idx;
+            s.sel_win = 0;
+            return true;
+        }
+    }
+    false
 }
 
 fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
@@ -569,7 +619,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k: workspace   h/l: window   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
+    let help = "j/k: workspace   h/l: window   Tab: screen   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }

@@ -120,3 +120,21 @@ pub fn close_window(id: u64) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Drop a workspace's name (by index or name reference). niri keeps named
+/// workspaces around forever, so once I've emptied a named workspace I unset
+/// its name and niri reclaims the now-empty, unnamed workspace. Unnamed
+/// workspaces are reclaimed automatically, so this is a no-op for them.
+pub fn unset_workspace_name(reference: &str) -> Result<(), String> {
+    let out = Command::new("niri")
+        .args(["msg", "action", "unset-workspace-name", reference])
+        .output()
+        .map_err(|e| format!("failed to run unset-workspace-name: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "unset-workspace-name {reference} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
+}

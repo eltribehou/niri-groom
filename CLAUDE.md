@@ -21,14 +21,20 @@ workspace or a single window from the keyboard with no confirmation.
 
 | Key            | Action                                   |
 | -------------- | ---------------------------------------- |
-| `j` / `Down`   | Select next workspace (vertical)         |
-| `k` / `Up`     | Select previous workspace                |
+| `j` / `Down`   | Select next workspace; crosses to the next screen at the boundary |
+| `k` / `Up`     | Select previous workspace; crosses to the previous screen at the boundary |
 | `l` / `Right`  | Select next window in the workspace       |
 | `h` / `Left`   | Select previous window                   |
+| `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
 | `x`            | Kill the selected window — no confirm     |
 | `r`            | Force a refresh                          |
 | `q` / `Esc`    | Quit                                     |
+
+The overlay opens on whichever workspace is currently focused. Killing a
+workspace closes all its windows and then runs `unset-workspace-name` on it, so
+niri reclaims the now-empty (formerly named) workspace instead of leaving it
+behind. Unnamed workspaces are reclaimed by niri automatically.
 
 The overlay uses `KeyboardMode::Exclusive`, so while it is open it grabs the whole
 keyboard. That's intentional (it's a transient modal tool), but it means I should
@@ -78,6 +84,41 @@ automatically on `cd`. Run `direnv allow` once.
 
 `nix build` produces a standalone binary at `./result/bin/niri-groom`, and
 `nix run` builds and runs it.
+
+## Deploying with home-manager
+
+The flake exposes `packages.default` (built with `buildRustPackage` + wrapped by
+`wrapGAppsHook4`, so the GTK runtime env is set up). I install it through my
+home-manager flake and bind it to a niri key, so day-to-day it's just the
+`niri-groom` command — no `nix run`.
+
+In the home-manager flake `inputs`:
+
+```nix
+niri-groom.url = "path:/home/sam/proj/perso/niri-groom";
+# (or a git remote once pushed, e.g. "git+ssh://…/niri-groom")
+```
+
+In a home-manager module (make `inputs` available via `extraSpecialArgs`):
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  home.packages = [ inputs.niri-groom.packages.${pkgs.system}.default ];
+}
+```
+
+Then bind it in the niri config (KDL):
+
+```kdl
+binds {
+    Mod+Shift+K { spawn "niri-groom"; }
+}
+```
+
+After editing the binary's source I rebuild the home-manager generation
+(`home-manager switch --flake …`, bumping the flake input with
+`nix flake lock --update-input niri-groom` if it's pinned) to pick up changes.
 
 ## Testing / running safely
 
