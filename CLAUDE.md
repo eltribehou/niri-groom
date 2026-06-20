@@ -23,6 +23,8 @@ workspace or a single window from the keyboard with no confirmation.
 | -------------- | ---------------------------------------- |
 | `j` / `Down`   | Select next workspace; crosses to the next screen at the boundary |
 | `k` / `Up`     | Select previous workspace; crosses to the previous screen at the boundary |
+| `Shift+J`      | Move the selected workspace down within its monitor |
+| `Shift+K`      | Move the selected workspace up within its monitor |
 | `l` / `Right`  | Select next window in the workspace       |
 | `h` / `Left`   | Select previous window                   |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
@@ -35,6 +37,13 @@ The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so
 niri reclaims the now-empty (formerly named) workspace instead of leaving it
 behind. Unnamed workspaces are reclaimed by niri automatically.
+
+niri's `move-workspace-up`/`-down` only act on the *focused* workspace, and
+`focus-workspace` only resolves within the focused output. So moving the selected
+workspace is a sequence: focus its monitor → focus it by index → move. Because
+that disturbs focus, I record the previously focused workspace first and refocus
+it afterwards (by id, re-reading state since the reorder shifts indices), leaving
+focus where the user left it.
 
 The overlay uses `KeyboardMode::Exclusive`, so while it is open it grabs the whole
 keyboard. That's intentional (it's a transient modal tool), but it means I should

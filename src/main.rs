@@ -271,6 +271,9 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
         // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
         (Some('k'), _) | (_, gdk::Key::Up) => move_ws(state, -1),
+        // Reorder the selected workspace within its monitor (Shift+J / Shift+K).
+        (Some('J'), _) => move_selected_ws(state, true),
+        (Some('K'), _) => move_selected_ws(state, false),
         // Window navigation (horizontal, within workspace).
         (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, 1),
         (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, -1),
@@ -320,6 +323,33 @@ fn move_ws(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     if next != s.sel_nav {
         s.sel_nav = next;
         s.sel_win = 0;
+        true
+    } else {
+        false
+    }
+}
+
+/// Move the selected workspace up/down within its monitor. The selection is
+/// preserved by id across the refresh, so the highlight follows the workspace.
+fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
+    let target = {
+        let s = state.borrow();
+        s.sel_ws()
+            .and_then(|v| v.ws.output.clone().map(|o| (o, v.ws.idx)))
+    };
+    if let Some((output, idx)) = target {
+        // Remember the compositor's focused workspace; moving requires focusing,
+        // so I restore it afterwards to leave focus where the user left it.
+        let prev_focus = niri::fetch_workspaces()
+            .ok()
+            .and_then(|wss| wss.into_iter().find(|w| w.is_focused).map(|w| w.id));
+
+        let _ = niri::move_workspace(&output, idx, down);
+
+        if let Some(id) = prev_focus {
+            let _ = niri::focus_workspace_by_id(id);
+        }
+        refresh(state);
         true
     } else {
         false
@@ -619,7 +649,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k: workspace   h/l: window   Tab: screen   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
+    let help = "j/k: workspace   J/K: move workspace   h/l: window   Tab: screen   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }

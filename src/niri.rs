@@ -106,19 +106,25 @@ pub fn fetch_windows() -> Result<Vec<Window>, String> {
     niri_json("windows")
 }
 
-/// Close a single window by id (no confirmation).
-pub fn close_window(id: u64) -> Result<(), String> {
+/// Run `niri msg action <args...>`.
+fn action(args: &[&str]) -> Result<(), String> {
     let out = Command::new("niri")
-        .args(["msg", "action", "close-window", "--id", &id.to_string()])
+        .args(["msg", "action"])
+        .args(args)
         .output()
-        .map_err(|e| format!("failed to run close-window: {e}"))?;
+        .map_err(|e| format!("failed to run niri action {args:?}: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "close-window {id} failed: {}",
+            "niri action {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         ));
     }
     Ok(())
+}
+
+/// Close a single window by id (no confirmation).
+pub fn close_window(id: u64) -> Result<(), String> {
+    action(&["close-window", "--id", &id.to_string()])
 }
 
 /// Drop a workspace's name (by index or name reference). niri keeps named
@@ -126,15 +132,36 @@ pub fn close_window(id: u64) -> Result<(), String> {
 /// its name and niri reclaims the now-empty, unnamed workspace. Unnamed
 /// workspaces are reclaimed automatically, so this is a no-op for them.
 pub fn unset_workspace_name(reference: &str) -> Result<(), String> {
-    let out = Command::new("niri")
-        .args(["msg", "action", "unset-workspace-name", reference])
-        .output()
-        .map_err(|e| format!("failed to run unset-workspace-name: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "unset-workspace-name {reference} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+    action(&["unset-workspace-name", reference])
+}
+
+/// Focus a workspace by its stable id. `focus-workspace` only takes an index or
+/// name, and indices can shift after a reorder, so I re-read the current state
+/// to find the workspace's monitor and current index.
+pub fn focus_workspace_by_id(id: u64) -> Result<(), String> {
+    let wss = fetch_workspaces()?;
+    let ws = wss
+        .iter()
+        .find(|w| w.id == id)
+        .ok_or_else(|| format!("workspace {id} no longer exists"))?;
+    if let Some(output) = &ws.output {
+        action(&["focus-monitor", output])?;
     }
-    Ok(())
+    action(&["focus-workspace", &ws.idx.to_string()])
+}
+
+/// Move a workspace up or down within its monitor's stack.
+///
+/// `move-workspace-up`/`-down` only act on the *focused* workspace, and
+/// `focus-workspace` only resolves within the focused output, so I first focus
+/// the workspace's monitor, then the workspace by its (per-monitor) index, then
+/// move it. niri clamps the move at the top/bottom of the stack.
+pub fn move_workspace(output: &str, idx: i64, down: bool) -> Result<(), String> {
+    action(&["focus-monitor", output])?;
+    action(&["focus-workspace", &idx.to_string()])?;
+    action(&[if down {
+        "move-workspace-down"
+    } else {
+        "move-workspace-up"
+    }])
 }
