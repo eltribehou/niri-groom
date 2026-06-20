@@ -1,0 +1,38 @@
+# niri-groom
+
+A fullscreen overlay for the [niri](https://github.com/YaLTeR/niri) Wayland
+compositor that shows my workspaces and windows as a proportional map — like the
+overview, but with workspace names and window titles spelled out — and lets me kill a
+whole workspace or a single window from the keyboard, instantly.
+
+![keys: j/k workspace · h/l window · w kill workspace · x kill window · q quit](#)
+
+## Keys
+
+| Key           | Action                                       |
+| ------------- | -------------------------------------------- |
+| `j` / `k`     | Select next / previous **workspace**         |
+| `h` / `l`     | Select previous / next **window**            |
+| `w`           | Kill the selected workspace (all its windows) |
+| `x`           | Kill the selected window                     |
+| `r`           | Refresh                                      |
+| `q` / `Esc`   | Quit                                         |
+
+There is **no confirmation** — `w` and `x` kill immediately.
+
+## Run
+
+Requires [Nix](https://nixos.org/) with flakes enabled. All build tooling
+(Rust + GTK4 + gtk4-layer-shell) is provided by the flake; nothing is installed
+globally.
+
+```sh
+nix run            # build and launch
+# or
+nix build          # → ./result/bin/niri-groom
+```
+
+For development, `nix develop` drops you into a shell with `cargo`, or use
+[direnv](https://direnv.net/) (`direnv allow`) to load it automatically.
+
+See [CLAUDE.md](./CLAUDE.md) for architecture and dev notes.
