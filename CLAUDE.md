@@ -36,10 +36,14 @@ workspace or a single window from the keyboard with no confirmation.
 | `x`            | Kill the selected window — no confirm     |
 | `q` / `Esc`    | Quit                                     |
 
-While the rename field is open the whole keyboard feeds the edit buffer:
+While the rename field is open the whole keyboard feeds the edit buffer.
 `Enter` commits (`set-workspace-name`, or `unset-workspace-name` if left empty),
-`Esc` cancels, `Backspace` deletes. There's no separate manual-refresh key — the
-800ms timer keeps the map current.
+`Esc` / `C-g` cancels. The field is a small line editor (`Edit`) with
+readline-style (Emacs) bindings: `C-a`/`C-e` start/end, `C-b`/`C-f` char,
+`M-b`/`M-f` word, `C-d`/`Backspace` (`C-h`) delete, `C-k` kill-to-end,
+`C-u` kill-to-start, `C-w`/`M-Backspace` kill-word-back, `M-d` kill-word-fwd,
+plus arrows/Home/End/Delete. There's no separate manual-refresh key — the 800ms
+timer keeps the map current.
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so

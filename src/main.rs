@@ -37,14 +37,128 @@ struct Model {
     nav: Vec<(usize, usize)>,
 }
 
+/// A tiny line editor for the rename field, with a cursor and readline-style
+/// (Emacs) editing operations. Stored as chars so the cursor is codepoint-safe.
+struct Edit {
+    buf: Vec<char>,
+    cursor: usize,
+}
+
+impl Edit {
+    fn new(s: &str) -> Self {
+        let buf: Vec<char> = s.chars().collect();
+        let cursor = buf.len();
+        Edit { buf, cursor }
+    }
+
+    fn text(&self) -> String {
+        self.buf.iter().collect()
+    }
+
+    fn insert(&mut self, c: char) {
+        self.buf.insert(self.cursor, c);
+        self.cursor += 1;
+    }
+
+    /// Delete the char before the cursor (Backspace / C-h).
+    fn backspace(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.buf.remove(self.cursor);
+        }
+    }
+
+    /// Delete the char at the cursor (Delete / C-d).
+    fn delete(&mut self) {
+        if self.cursor < self.buf.len() {
+            self.buf.remove(self.cursor);
+        }
+    }
+
+    fn left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn right(&mut self) {
+        if self.cursor < self.buf.len() {
+            self.cursor += 1;
+        }
+    }
+
+    fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn end(&mut self) {
+        self.cursor = self.buf.len();
+    }
+
+    /// Kill from the cursor to the end of the line (C-k).
+    fn kill_to_end(&mut self) {
+        self.buf.truncate(self.cursor);
+    }
+
+    /// Kill from the start of the line to the cursor (C-u).
+    fn kill_to_start(&mut self) {
+        self.buf.drain(0..self.cursor);
+        self.cursor = 0;
+    }
+
+    /// Word boundary to the left of the cursor (skip separators, then word).
+    fn prev_word(&self) -> usize {
+        let mut i = self.cursor;
+        while i > 0 && !self.buf[i - 1].is_alphanumeric() {
+            i -= 1;
+        }
+        while i > 0 && self.buf[i - 1].is_alphanumeric() {
+            i -= 1;
+        }
+        i
+    }
+
+    /// Word boundary to the right of the cursor.
+    fn next_word(&self) -> usize {
+        let n = self.buf.len();
+        let mut i = self.cursor;
+        while i < n && !self.buf[i].is_alphanumeric() {
+            i += 1;
+        }
+        while i < n && self.buf[i].is_alphanumeric() {
+            i += 1;
+        }
+        i
+    }
+
+    fn word_left(&mut self) {
+        self.cursor = self.prev_word();
+    }
+
+    fn word_right(&mut self) {
+        self.cursor = self.next_word();
+    }
+
+    /// Kill the word before the cursor (C-w / M-Backspace).
+    fn kill_word_left(&mut self) {
+        let start = self.prev_word();
+        self.buf.drain(start..self.cursor);
+        self.cursor = start;
+    }
+
+    /// Kill the word after the cursor (M-d).
+    fn kill_word_right(&mut self) {
+        let end = self.next_word();
+        self.buf.drain(self.cursor..end);
+    }
+}
+
 struct State {
     model: Model,
     /// Index into `model.nav` — the currently selected workspace.
     sel_nav: usize,
     /// Index into the selected workspace's `windows`.
     sel_win: usize,
-    /// When renaming, the in-overlay edit buffer for the selected workspace.
-    editing: Option<String>,
+    /// When renaming, the in-overlay line editor for the selected workspace.
+    editing: Option<Edit>,
     error: Option<String>,
 }
 
@@ -233,8 +347,8 @@ fn build_ui(app: &Application) {
         let state = state.clone();
         let area = area.clone();
         let app = app.clone();
-        key.connect_key_pressed(move |_ctrl, keyval, _code, _mods| {
-            let handled = handle_key(&keyval, &state, &app);
+        key.connect_key_pressed(move |_ctrl, keyval, _code, mods| {
+            let handled = handle_key(&keyval, mods, &state, &app);
             if handled {
                 area.queue_draw();
             }
@@ -278,57 +392,107 @@ fn restore_focus((prev_win, prev_ws): (Option<u64>, Option<u64>)) {
     }
 }
 
-/// Handle a keystroke while the rename text field is open. Esc cancels, Enter
-/// commits, Backspace deletes, and any printable character is appended.
-fn handle_edit_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>) -> bool {
+/// Commit the rename: focus the target workspace, set (or unset, if empty) its
+/// name, then restore the prior focus and close the field.
+fn commit_rename(state: &Rc<RefCell<State>>) {
+    let (target, name) = {
+        let s = state.borrow();
+        (
+            s.selected_ws_id(),
+            s.editing.as_ref().map(|e| e.text()).unwrap_or_default(),
+        )
+    };
+    if let Some(id) = target {
+        let focus = capture_focus();
+        if niri::focus_workspace_by_id(id).is_ok() {
+            let _ = niri::rename_focused_workspace(name.trim());
+        }
+        restore_focus(focus);
+    }
+    state.borrow_mut().editing = None;
+    refresh(state);
+}
+
+/// Handle a keystroke while the rename field is open, with readline-style
+/// (Emacs) editing bindings. Returns true to request a redraw.
+fn handle_edit_key(keyval: &gdk::Key, mods: gdk::ModifierType, state: &Rc<RefCell<State>>) -> bool {
+    let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
+    let alt = mods.contains(gdk::ModifierType::ALT_MASK);
+    let ch = keyval.to_unicode();
+    let lc = ch.map(|c| c.to_ascii_lowercase());
+
+    // Cancel (Esc / C-g) and commit (Enter) end the edit and re-enter `state`,
+    // so handle them before borrowing the buffer.
+    if matches!(*keyval, gdk::Key::Escape) || (ctrl && lc == Some('g')) {
+        state.borrow_mut().editing = None;
+        return true;
+    }
+    if matches!(*keyval, gdk::Key::Return | gdk::Key::KP_Enter) {
+        commit_rename(state);
+        return true;
+    }
+
+    let mut s = state.borrow_mut();
+    let e = match s.editing.as_mut() {
+        Some(e) => e,
+        None => return false,
+    };
+
+    if ctrl {
+        match lc {
+            Some('a') => e.home(),
+            Some('e') => e.end(),
+            Some('b') => e.left(),
+            Some('f') => e.right(),
+            Some('d') => e.delete(),
+            Some('h') => e.backspace(),
+            Some('k') => e.kill_to_end(),
+            Some('u') => e.kill_to_start(),
+            Some('w') => e.kill_word_left(),
+            _ => return false,
+        }
+        return true;
+    }
+
+    if alt {
+        match lc {
+            Some('b') => e.word_left(),
+            Some('f') => e.word_right(),
+            Some('d') => e.kill_word_right(),
+            _ if matches!(*keyval, gdk::Key::BackSpace) => e.kill_word_left(),
+            _ => return false,
+        }
+        return true;
+    }
+
     match *keyval {
-        gdk::Key::Escape => {
-            state.borrow_mut().editing = None;
-            true
-        }
-        gdk::Key::Return | gdk::Key::KP_Enter => {
-            let (target, name) = {
-                let s = state.borrow();
-                (s.selected_ws_id(), s.editing.clone().unwrap_or_default())
-            };
-            if let Some(id) = target {
-                // Renaming acts on the focused workspace, so focus it, rename,
-                // then put focus back where the user left it.
-                let focus = capture_focus();
-                if niri::focus_workspace_by_id(id).is_ok() {
-                    let _ = niri::rename_focused_workspace(name.trim());
-                }
-                restore_focus(focus);
-            }
-            state.borrow_mut().editing = None;
-            refresh(state);
-            true
-        }
-        gdk::Key::BackSpace => {
-            if let Some(buf) = state.borrow_mut().editing.as_mut() {
-                buf.pop();
-            }
-            true
-        }
+        gdk::Key::BackSpace => e.backspace(),
+        gdk::Key::Delete => e.delete(),
+        gdk::Key::Left => e.left(),
+        gdk::Key::Right => e.right(),
+        gdk::Key::Home => e.home(),
+        gdk::Key::End => e.end(),
         _ => {
-            if let Some(ch) = keyval.to_unicode() {
-                if !ch.is_control() {
-                    if let Some(buf) = state.borrow_mut().editing.as_mut() {
-                        buf.push(ch);
-                    }
-                    return true;
-                }
+            if let Some(c) = ch.filter(|c| !c.is_control()) {
+                e.insert(c);
+            } else {
+                return false;
             }
-            false
         }
     }
+    true
 }
 
 /// Returns true if the key changed something and a redraw is wanted.
-fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) -> bool {
+fn handle_key(
+    keyval: &gdk::Key,
+    mods: gdk::ModifierType,
+    state: &Rc<RefCell<State>>,
+    app: &Application,
+) -> bool {
     // While renaming, the whole keyboard feeds the edit buffer.
     if state.borrow().editing.is_some() {
-        return handle_edit_key(keyval, state);
+        return handle_edit_key(keyval, mods, state);
     }
 
     let ch = keyval.to_unicode();
@@ -345,7 +509,7 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
                 .sel_ws()
                 .map(|ws| ws.ws.name.clone().unwrap_or_default());
             if let Some(name) = name {
-                state.borrow_mut().editing = Some(name);
+                state.borrow_mut().editing = Some(Edit::new(&name));
             }
             true
         }
@@ -607,19 +771,20 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         }
     }
 
-    if let Some(buf) = &state.editing {
-        draw_rename(cr, w, h, buf);
+    if let Some(edit) = &state.editing {
+        draw_rename(cr, w, h, edit);
     }
 }
 
-/// A centered modal text field for renaming the selected workspace.
-fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, buf: &str) {
+/// A centered modal text field for renaming the selected workspace, with a
+/// caret drawn at the edit cursor.
+fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
     // Dim everything behind the field.
     set_rgba(cr, 0.0, 0.0, 0.0, 0.45);
     cr.rectangle(0.0, 0.0, w, h);
     let _ = cr.fill();
 
-    let bw = (w * 0.5).min(560.0).max(320.0);
+    let bw = (w * 0.5).clamp(320.0, 560.0);
     let bh = 92.0;
     let bx = (w - bw) / 2.0;
     let by = (h - bh) / 2.0;
@@ -634,13 +799,35 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, buf: &str) {
 
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(12.0);
-    text_at(cr, bx + 16.0, by + 24.0, "Rename workspace  (Enter: confirm · Esc: cancel · empty: unset)");
+    text_at(
+        cr,
+        bx + 16.0,
+        by + 24.0,
+        "Rename workspace  (Enter: confirm · Esc: cancel · empty: unset)",
+    );
 
-    // The buffer plus a block cursor.
-    set_rgba(cr, 0.95, 0.96, 0.99, 1.0);
+    let text_x = bx + 16.0;
+    let text_y = by + 62.0;
     cr.set_font_size(20.0);
-    let shown = fit_text(cr, &format!("{buf}_"), bw - 32.0);
-    text_at(cr, bx + 16.0, by + 60.0, &shown);
+
+    // Clip to the field so a long name can't spill past the border.
+    let _ = cr.save();
+    cr.rectangle(bx + 8.0, by + 32.0, bw - 16.0, bh - 40.0);
+    cr.clip();
+
+    set_rgba(cr, 0.95, 0.96, 0.99, 1.0);
+    text_at(cr, text_x, text_y, &edit.text());
+
+    // Caret: a thin vertical bar at the cursor's x-advance.
+    let prefix: String = edit.buf[..edit.cursor].iter().collect();
+    let caret_x = text_x + cr.text_extents(&prefix).map(|e| e.x_advance()).unwrap_or(0.0);
+    set_rgba(cr, 0.40, 0.80, 1.0, 1.0);
+    cr.set_line_width(1.5);
+    cr.move_to(caret_x, text_y - 17.0);
+    cr.line_to(caret_x, text_y + 4.0);
+    let _ = cr.stroke();
+
+    let _ = cr.restore();
 }
 
 #[allow(clippy::too_many_arguments)]
