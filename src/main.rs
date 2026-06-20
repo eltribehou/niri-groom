@@ -285,6 +285,9 @@ fn handle_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>, app: &Application) 
         // Window navigation (horizontal, within workspace).
         (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, 1),
         (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, -1),
+        // Move the selected window's column left/right (Shift+H / Shift+L).
+        (Some('L'), _) => move_selected_column(state, true),
+        (Some('H'), _) => move_selected_column(state, false),
         // Jump straight to the next/previous screen (output).
         (_, gdk::Key::Tab) => move_output(state, 1),
         (_, gdk::Key::ISO_Left_Tab) => move_output(state, -1),
@@ -362,6 +365,35 @@ fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
     } else {
         false
     }
+}
+
+/// Move the selected window's column left/right within its workspace, then
+/// restore focus to where the user left it (moving requires focusing a window
+/// in the column). The selection follows the window by id across the refresh.
+fn move_selected_column(state: &Rc<RefCell<State>>, right: bool) -> bool {
+    let win_id = match state.borrow().selected_win_id() {
+        Some(id) => id,
+        None => return false,
+    };
+
+    // Remember the compositor's focused window (or workspace, if none) so the
+    // move doesn't leave focus somewhere the user didn't ask for.
+    let prev_win = niri::fetch_windows()
+        .ok()
+        .and_then(|ws| ws.into_iter().find(|w| w.is_focused).map(|w| w.id));
+    let prev_ws = niri::fetch_workspaces()
+        .ok()
+        .and_then(|wss| wss.into_iter().find(|w| w.is_focused).map(|w| w.id));
+
+    let _ = niri::move_column(win_id, right);
+
+    if let Some(id) = prev_win {
+        let _ = niri::focus_window(id);
+    } else if let Some(id) = prev_ws {
+        let _ = niri::focus_workspace_by_id(id);
+    }
+    refresh(state);
+    true
 }
 
 /// Jump the selection to the first workspace of the next/previous output,
@@ -657,7 +689,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k: workspace   J/K: move workspace   h/l: window   Tab: screen   Enter: focus   w: kill workspace   x: kill window   r: refresh   q/Esc: quit";
+    let help = "j/k ws · J/K move ws · h/l win · H/L move col · Tab screen · Enter focus · w kill ws · x kill win · r refresh · q quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }

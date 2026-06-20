@@ -27,6 +27,8 @@ workspace or a single window from the keyboard with no confirmation.
 | `Shift+K`      | Move the selected workspace up within its monitor |
 | `l` / `Right`  | Select next window in the workspace       |
 | `h` / `Left`   | Select previous window                   |
+| `Shift+L`      | Move the selected window's column right within the workspace |
+| `Shift+H`      | Move the selected window's column left within the workspace |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `Enter`        | Focus the selected workspace and dismiss the overlay |
 | `w`            | Kill the selected workspace (all windows) — no confirm |

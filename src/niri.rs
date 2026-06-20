@@ -150,6 +150,23 @@ pub fn focus_workspace_by_id(id: u64) -> Result<(), String> {
     action(&["focus-workspace", &ws.idx.to_string()])
 }
 
+/// Focus a window by its (stable) id.
+pub fn focus_window(id: u64) -> Result<(), String> {
+    action(&["focus-window", "--id", &id.to_string()])
+}
+
+/// Move the column containing `window_id` left or right within its workspace.
+/// `move-column-left`/`-right` act on the focused column, so I focus a window
+/// in the column first. niri clamps the move at the ends of the workspace.
+pub fn move_column(window_id: u64, right: bool) -> Result<(), String> {
+    focus_window(window_id)?;
+    action(&[if right {
+        "move-column-right"
+    } else {
+        "move-column-left"
+    }])
+}
+
 /// Move a workspace up or down within its monitor's stack.
 ///
 /// `move-workspace-up`/`-down` only act on the *focused* workspace, and
