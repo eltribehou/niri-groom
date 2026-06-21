@@ -1031,30 +1031,63 @@ fn draw_window(
     cr.rectangle(x, y, w, h);
     let _ = cr.stroke();
 
-    // Labels: app id (small) then title.
-    let text_w = w - 12.0;
+    // Labels: app id (secondary, above) then title (primary). The title is the
+    // important one, so in a short box I drop the app id and show only the title.
+    let text_w = w - 14.0;
     if text_w <= 0.0 {
         return;
     }
+    let tx = x + 7.0;
 
-    if selected {
-        set_rgba(cr, 0.04, 0.08, 0.14, 1.0);
-    } else {
-        set_rgba(cr, 0.66, 0.72, 0.82, 1.0);
-    }
-    cr.set_font_size(10.0);
-    if let Some(app_id) = &win.app_id {
-        text_at(cr, x + 6.0, y + 14.0, &fit_text(cr, app_id, text_w));
-    }
+    let title_color = |cr: &gtk::cairo::Context| {
+        if selected {
+            set_rgba(cr, 0.02, 0.05, 0.10, 1.0);
+        } else {
+            set_rgba(cr, 0.96, 0.97, 0.99, 1.0);
+        }
+    };
 
-    if selected {
-        set_rgba(cr, 0.02, 0.05, 0.10, 1.0);
-    } else {
-        set_rgba(cr, 0.90, 0.92, 0.96, 1.0);
-    }
-    cr.set_font_size(12.0);
-    if h > 26.0 {
-        text_at(cr, x + 6.0, y + 30.0, &fit_text(cr, &win.label(), text_w));
+    if h >= 46.0 {
+        // app id — secondary context line.
+        if selected {
+            set_rgba(cr, 0.06, 0.11, 0.20, 1.0);
+        } else {
+            set_rgba(cr, 0.80, 0.85, 0.93, 1.0);
+        }
+        cr.set_font_size(12.0);
+        if let Some(app_id) = &win.app_id {
+            text_at(cr, tx, y + 19.0, &fit_text(cr, app_id, text_w));
+        }
+
+        // title — primary, bold and larger.
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Bold,
+        );
+        title_color(cr);
+        cr.set_font_size(15.0);
+        text_at(cr, tx, y + 42.0, &fit_text(cr, &win.label(), text_w));
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
+    } else if h >= 20.0 {
+        // Tight box: just the title, vertically centred.
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Bold,
+        );
+        title_color(cr);
+        cr.set_font_size(14.0);
+        text_at(cr, tx, y + h / 2.0 + 5.0, &fit_text(cr, &win.label(), text_w));
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
     }
 }
 
