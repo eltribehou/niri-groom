@@ -49,7 +49,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Ctrl+L`       | Move the selected window's column right within the workspace |
 | `Ctrl+H`       | Move the selected window's column left within the workspace |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
-| `Enter`        | Focus the selected workspace and dismiss the overlay |
+| `Enter`        | Focus the selected window (or workspace if empty); dismiss the overlay only if the target is on the overlay's own monitor |
 | `r`            | Rename the selected workspace (inline text field) |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
 | `?`            | Toggle the key legend panel (hidden by default; a small `? keys` hint shows) |
@@ -115,6 +115,13 @@ The config (`src/config.rs`) is `$XDG_CONFIG_HOME/niri-groom/niri-groom.kdl`
 read at startup and rewritten on save via the `kdl` crate, which round-trips the
 document so comments and any other keys survive. Schema today is just
 `theme "<name>"`. The default is catppuccin-mocha.
+
+`Enter` focuses the *selected window* (`focus-window`), falling back to the
+workspace when it's empty. It only quits the overlay when the target is on the
+overlay's own monitor (found via `overlay_output` — the connector of the
+`Monitor` under the window's surface): there the overlay covers the thing you're
+switching to, so it must close; on another monitor it stays put as a map and you
+keep working on the other screen (losing focus hides its selection).
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so

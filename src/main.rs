@@ -764,6 +764,16 @@ fn handle_edit_key(keyval: &gdk::Key, mods: gdk::ModifierType, state: &Rc<RefCel
     true
 }
 
+/// The connector name (e.g. "HDMI-A-1") of the monitor the overlay is on, to
+/// compare against a target workspace's output.
+fn overlay_output(app: &Application) -> Option<String> {
+    let window = app.windows().into_iter().next()?;
+    let surface = window.surface()?;
+    let display = gtk::prelude::WidgetExt::display(&window);
+    let monitor = display.monitor_at_surface(&surface)?;
+    monitor.connector().map(|s| s.to_string())
+}
+
 /// Returns true if the key changed something and a redraw is wanted.
 fn handle_key(
     keyval: &gdk::Key,
@@ -824,13 +834,37 @@ fn handle_key(
             state.borrow_mut().picker = Some(idx);
             true
         }
-        // Focus the selected workspace and dismiss the overlay (jump to it).
+        // Focus the selected window (or the workspace if it's empty), then jump
+        // to it. Only dismiss the overlay if the target is on the overlay's own
+        // monitor — otherwise the overlay stays as a map on its screen while you
+        // work on the other one.
         (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => {
-            if let Some(id) = state.borrow().selected_ws_id() {
+            let (win_id, ws_id, target_output) = {
+                let s = state.borrow();
+                (
+                    s.selected_win_id(),
+                    s.selected_ws_id(),
+                    s.sel_ws().and_then(|v| v.ws.output.clone()),
+                )
+            };
+            if let Some(id) = win_id {
+                let _ = niri::focus_window(id);
+            } else if let Some(id) = ws_id {
                 let _ = niri::focus_workspace_by_id(id);
             }
-            app.quit();
-            false
+            let same_monitor = match (overlay_output(app), target_output) {
+                (Some(overlay), Some(target)) => overlay == target,
+                // Unknown monitor → behave as before (dismiss).
+                _ => true,
+            };
+            if same_monitor {
+                app.quit();
+                false
+            } else {
+                // Keep the overlay; losing focus flips `is_active` and hides the
+                // selection, so it reads as a passive map.
+                true
+            }
         }
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.

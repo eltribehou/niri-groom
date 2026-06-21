@@ -17,7 +17,7 @@ whole workspace or a single window from the keyboard, instantly.
 | `h` / `l`       | Select previous / next **window**            |
 | `C-h` / `C-l`   | **Move** the selected window's column left / right |
 | `Tab` / `S-Tab` | Jump to the next / previous **screen**       |
-| `Enter`         | **Focus** the selected workspace and close the overlay |
+| `Enter`         | **Focus** the selected window (closes the overlay only if it's on the overlay's monitor) |
 | `r`             | **Rename** the selected workspace (inline field, readline/Emacs keys) |
 | `t`             | Open the **theme** picker (live preview; Enter saves, Esc cancels) |
 | `?`             | Toggle the **key legend** (hidden by default) |
