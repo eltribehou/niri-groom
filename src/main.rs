@@ -173,6 +173,8 @@ struct State {
     theme_idx: usize,
     /// When the theme picker is open, the highlighted theme index (applied live).
     picker: Option<usize>,
+    /// Whether the key legend panel is shown (toggled with `?`).
+    show_help: bool,
     error: Option<String>,
 }
 
@@ -386,6 +388,7 @@ fn build_ui(app: &Application) {
         themes,
         theme_idx,
         picker: None,
+        show_help: false,
         error: None,
     }));
     // Open the overlay on the currently focused workspace.
@@ -589,6 +592,17 @@ fn handle_key(
     }
 
     let ch = keyval.to_unicode();
+
+    // `?` toggles the key legend; while it's up, Esc closes it (rather than quit).
+    if ch == Some('?') {
+        let mut s = state.borrow_mut();
+        s.show_help = !s.show_help;
+        return true;
+    }
+    if state.borrow().show_help && matches!(*keyval, gdk::Key::Escape) {
+        state.borrow_mut().show_help = false;
+        return true;
+    }
 
     // Ctrl+H / Ctrl+L: move the selected window's column within its workspace.
     if mods.contains(gdk::ModifierType::CONTROL_MASK) {
@@ -835,7 +849,8 @@ fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
 // ---------------------------------------------------------------------------
 
 const PAD: f64 = 20.0;
-const FOOTER_H: f64 = 32.0;
+/// Reserved strip at the bottom for the small "? keys" hint.
+const FOOTER_H: f64 = 22.0;
 const OUTPUT_HEADER_H: f64 = 30.0;
 const WS_GAP: f64 = 12.0;
 const WS_HEADER_H: f64 = 28.0;
@@ -905,8 +920,6 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         gtk::cairo::FontSlant::Normal,
         gtk::cairo::FontWeight::Normal,
     );
-
-    draw_footer(cr, w, h, t);
 
     if let Some(err) = &state.error {
         set(cr, t.urgent, 1.0);
@@ -990,6 +1003,10 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         draw_picker(cr, w, h, state);
     } else if let Some(edit) = &state.editing {
         draw_rename(cr, w, h, edit, t);
+    } else if state.show_help {
+        draw_help(cr, w, h, t);
+    } else {
+        draw_hint(cr, w, h, t);
     }
 }
 
@@ -1102,7 +1119,7 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         cr,
         bx + 16.0,
         by + 42.0,
-        "↑/↓ select · Enter save · Esc cancel",
+        "j/k select · Enter save · Esc cancel",
     );
 
     // Rows.
@@ -1369,22 +1386,113 @@ fn draw_window(
     }
 }
 
-fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
-    // Separator line above the footer.
-    set(cr, t.text, 0.08);
-    cr.set_line_width(1.0);
-    cr.move_to(PAD, h - FOOTER_H + 4.0);
-    cr.line_to(w - PAD, h - FOOTER_H + 4.0);
+/// The grouped key legend shown when `?` is pressed.
+fn key_legend() -> [(&'static str, &'static str); 3] {
+    [
+        (
+            "Workspace",
+            "j/k prev/next · Shift+J/K reorder · Shift+H/L to screen · r rename · w kill",
+        ),
+        ("Window", "h/l prev/next · Ctrl+H/L move column · x kill"),
+        (
+            "General",
+            "Tab switch screen · Enter focus · t theme · q quit",
+        ),
+    ]
+}
+
+/// A small unobtrusive hint in the bottom-right so the legend is discoverable.
+fn draw_hint(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Normal,
+    );
+    set(cr, t.subtext, 0.5);
+    cr.set_font_size(12.0);
+    let s = "? keys";
+    let tw = cr.text_extents(s).map(|e| e.x_advance()).unwrap_or(40.0);
+    text_at(cr, w - PAD - tw, h - 7.0, s);
+}
+
+/// The key legend as a centered panel (toggled with `?`), grouped by target.
+fn draw_help(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
+    let rows = key_legend();
+
+    set_rgba(cr, 0.0, 0.0, 0.0, 0.45);
+    cr.rectangle(0.0, 0.0, w, h);
+    let _ = cr.fill();
+
+    let line_h = 26.0;
+    let bw = 720.0_f64.min(w - 2.0 * PAD);
+    let bh = 56.0 + rows.len() as f64 * line_h + 6.0;
+    let bx = (w - bw) / 2.0;
+    let by = (h - bh) / 2.0;
+
+    set(cr, t.surface, 1.0);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
+    let _ = cr.fill();
+    set(cr, t.accent, 1.0);
+    cr.set_line_width(2.0);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.stroke();
 
+    // Title + close hint.
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    set(cr, t.text, 1.0);
+    cr.set_font_size(16.0);
+    text_at(cr, bx + 18.0, by + 30.0, "Keys");
     cr.select_font_face(
         "sans-serif",
         gtk::cairo::FontSlant::Normal,
         gtk::cairo::FontWeight::Normal,
     );
     set(cr, t.subtext, 0.9);
-    cr.set_font_size(13.0);
-    let help = "j/k ws · J/K move ws · H/L ws to screen · h/l win · ^H/^L move col · Tab screen · Enter focus · r rename · t theme · w kill ws · x kill win · q quit";
-    let fitted = fit_text(cr, help, w - 2.0 * PAD);
-    text_at(cr, PAD, h - 11.0, &fitted);
+    cr.set_font_size(12.0);
+    let close = "? or Esc to close";
+    let cw = cr.text_extents(close).map(|e| e.x_advance()).unwrap_or(0.0);
+    text_at(cr, bx + bw - 18.0 - cw, by + 30.0, close);
+
+    // Align the action columns to the widest label.
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(14.0);
+    let label_w = rows
+        .iter()
+        .map(|(label, _)| cr.text_extents(label).map(|e| e.x_advance()).unwrap_or(0.0))
+        .fold(0.0_f64, f64::max);
+    let actions_x = bx + 18.0 + label_w + 16.0;
+
+    for (i, (label, actions)) in rows.iter().enumerate() {
+        let y = by + 56.0 + 18.0 + i as f64 * line_h;
+
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Bold,
+        );
+        set(cr, t.accent, 1.0);
+        cr.set_font_size(14.0);
+        text_at(cr, bx + 18.0, y, label);
+
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
+        set(cr, t.text, 0.92);
+        text_at(
+            cr,
+            actions_x,
+            y,
+            &fit_text(cr, actions, bx + bw - 18.0 - actions_x),
+        );
+    }
 }

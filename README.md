@@ -20,6 +20,7 @@ whole workspace or a single window from the keyboard, instantly.
 | `Enter`         | **Focus** the selected workspace and close the overlay |
 | `r`             | **Rename** the selected workspace (inline field, readline/Emacs keys) |
 | `t`             | Open the **theme** picker (live preview; Enter saves, Esc cancels) |
+| `?`             | Toggle the **key legend** (hidden by default) |
 | `w`             | Kill the selected workspace (all its windows) |
 | `x`             | Kill the selected window                     |
 | `q` / `Esc`     | Quit                                         |

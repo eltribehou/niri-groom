@@ -46,6 +46,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Enter`        | Focus the selected workspace and dismiss the overlay |
 | `r`            | Rename the selected workspace (inline text field) |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
+| `?`            | Toggle the key legend panel (hidden by default; a small `? keys` hint shows) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
 | `x`            | Kill the selected window — no confirm     |
 | `q` / `Esc`    | Quit                                     |
