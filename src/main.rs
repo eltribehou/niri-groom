@@ -414,8 +414,11 @@ fn refresh(state: &Rc<RefCell<State>>) {
 struct Opts {
     /// Start in solo mode on the output with this name (if it exists).
     solo_monitor: Option<String>,
+    /// Place the overlay surface on this output (niri can't position a layer
+    /// surface from config, so the client must request it).
+    output: Option<String>,
     /// The layer-shell namespace (what niri matches the surface by). `--app-id`
-    /// sets it, so niri config can target a given instance (e.g. place a map).
+    /// sets it, so niri config can target a given instance for its rules.
     namespace: String,
 }
 
@@ -423,6 +426,7 @@ fn parse_args() -> Opts {
     let argv: Vec<String> = std::env::args().collect();
     let mut namespace = APP_NAMESPACE.to_string();
     let mut solo_monitor = None;
+    let mut output = None;
     let mut i = 1;
     while i < argv.len() {
         let arg = argv[i].clone();
@@ -430,7 +434,7 @@ fn parse_args() -> Opts {
             Some((k, v)) => (k, Some(v.to_string())),
             None => (arg.as_str(), None),
         };
-        if matches!(key, "--app-id" | "--solo") {
+        if matches!(key, "--app-id" | "--solo" | "--open-on-monitor") {
             let val = if inline.is_some() {
                 inline
             } else {
@@ -444,6 +448,7 @@ fn parse_args() -> Opts {
                     }
                 }
                 "--solo" => solo_monitor = val,
+                "--open-on-monitor" => output = val,
                 _ => unreachable!(),
             }
         }
@@ -451,6 +456,7 @@ fn parse_args() -> Opts {
     }
     Opts {
         solo_monitor,
+        output,
         namespace,
     }
 }
@@ -482,6 +488,23 @@ fn main() -> glib::ExitCode {
         .next()
         .unwrap_or_else(|| "niri-groom".into());
     app.run_with_args(&[argv0])
+}
+
+/// The gdk monitor whose connector matches `name`.
+fn gdk_monitor_by_name(name: &str) -> Option<gdk::Monitor> {
+    let display = gdk::Display::default()?;
+    let monitors = display.monitors();
+    for i in 0..monitors.n_items() {
+        if let Some(mon) = monitors
+            .item(i)
+            .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+        {
+            if mon.connector().as_deref() == Some(name) {
+                return Some(mon);
+            }
+        }
+    }
+    None
 }
 
 fn build_ui(app: &Application, opts: &Opts) {
@@ -561,6 +584,15 @@ fn build_ui(app: &Application, opts: &Opts) {
     window.set_keyboard_mode(KeyboardMode::Exclusive);
     for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
         window.set_anchor(edge, true);
+    }
+    // --open-on-monitor: niri can't place a layer surface from config, so the
+    // client requests the output here.
+    if let Some(mon) = opts
+        .output
+        .as_ref()
+        .and_then(|name| gdk_monitor_by_name(name))
+    {
+        window.set_monitor(Some(&mon));
     }
 
     let area = DrawingArea::new();

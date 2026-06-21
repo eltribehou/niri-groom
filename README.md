@@ -36,13 +36,14 @@ onto another workspace/monitor. Neighbours slide to open a gap as you drag.
 ## Options
 
 - `--solo <monitor>` — start showing only that monitor's content (full-width);
-  ignored if no monitor matches. It does not move the overlay — where it appears
-  is left to your niri config.
-- `--app-id <id>` — set the layer-shell namespace (default `niri-groom`), which is
-  what niri matches the surface by, and which keys single-instance. A different id
-  runs as a separate instance, so you can keep a persistent map alongside the
-  keybind-launched grooming overlay and place it from niri, e.g.
-  `niri-groom --solo eDP-1 --app-id niri-groom-map`.
+  ignored if no monitor matches.
+- `--open-on-monitor <monitor>` — open the overlay on that monitor. (niri can't
+  place a layer-shell surface from config, so the app requests it.) Independent of
+  `--solo`.
+- `--app-id <id>` — set the layer-shell namespace (default `niri-groom`); it keys
+  single-instance, so a different id runs as a separate instance. Lets you keep a
+  persistent map alongside the keybind-launched grooming overlay, e.g.
+  `niri-groom --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
 
 ## Themes
 

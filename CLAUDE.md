@@ -105,20 +105,25 @@ workspaces don't offset them.
 ## Command-line options
 
 - `--solo <monitor>` — start in solo mode showing only that output's content
-  (full-width). It does **not** move the overlay — the surface still maps on
-  whatever output niri places it on; *where* it appears is left to niri config
-  (matched via the namespace, below). Ignored if no output matches the name.
+  (full-width). This is about *what content* is shown, not where the overlay
+  appears. Ignored if no output matches the name.
+- `--open-on-monitor <monitor>` — place the overlay surface on that output (via
+  `gtk4-layer-shell` `set_monitor`). niri **cannot** position a layer-shell
+  surface from config — `open-on-output` is a *window*-rule and doesn't apply to
+  layer surfaces, and layer-rules have no output property — so the client must
+  request it. Independent of `--solo`: e.g. `--open-on-monitor eDP-1 --solo
+  HDMI-A-1` puts the overlay on eDP showing HDMI's map.
 - `--app-id <id>` — set the **layer-shell namespace** (default `niri-groom`).
-  niri identifies a layer surface by its namespace, so this is what niri config
-  matches to target a given instance (e.g. to place a dedicated map). A valid,
-  unique `GApplication` id is *derived* from it (`derive_app_id`) so single
-  instance still works and distinct namespaces are distinct instances — e.g. a
-  persistent map (`--app-id niri-groom-map`) coexists with the `Mod+G` grooming
-  instance (`niri-groom`).
+  niri identifies a layer surface by its namespace, so this is what niri
+  *layer-rules* match (for opacity/shadow/etc. — not placement). A valid, unique
+  `GApplication` id is *derived* from it (`derive_app_id`) so single-instance
+  still works and distinct namespaces are distinct instances — e.g. a persistent
+  map (`--app-id niri-groom-map`) coexists with the `Mod+G` grooming instance.
 
 Args are parsed by `parse_args()` before the app is built, and the app is run
 with `run_with_args` passing only argv[0] so `GApplication` doesn't try to parse
-our flags. A typical autostart map: `niri-groom --solo eDP-1 --app-id niri-groom-map`.
+our flags. A typical autostart map:
+`niri-groom --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
 
 ## Theming and config
 
