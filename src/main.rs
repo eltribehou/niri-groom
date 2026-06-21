@@ -360,8 +360,8 @@ fn build_ui(app: &Application) {
         .title("niri-groom")
         .build();
 
-    // Make the toplevel transparent so the cairo backdrop blends with the
-    // desktop behind, like niri's overview.
+    // Let the cairo backdrop own the whole surface (it paints an opaque fill);
+    // a transparent GTK window background avoids the theme drawing its own.
     let css = gtk::CssProvider::new();
     css.load_from_data("window { background: transparent; }");
     if let Some(display) = gdk::Display::default() {
@@ -781,8 +781,9 @@ fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, s: &str) {
 }
 
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
-    // Translucent backdrop.
-    set_rgba(cr, 0.06, 0.07, 0.10, 0.92);
+    // Opaque backdrop (a layer surface can't be forced opaque from niri config,
+    // so the app draws it fully opaque for readability).
+    set_rgba(cr, 0.06, 0.07, 0.10, 1.0);
     cr.rectangle(0.0, 0.0, w, h);
     let _ = cr.fill();
 
