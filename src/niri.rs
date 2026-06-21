@@ -90,6 +90,8 @@ pub struct Logical {
     pub x: f64,
     pub y: f64,
     pub width: f64,
+    /// Parsed for completeness; outputs are drawn full-height so it's unused.
+    #[allow(dead_code)]
     pub height: f64,
 }
 

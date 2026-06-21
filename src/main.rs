@@ -24,15 +24,16 @@ struct WsView {
     windows: Vec<niri::Window>,
 }
 
-/// One output (monitor) and its workspaces, sorted by index. The `x`/`y`/`w`/`h`
-/// are niri's logical placement, so I can draw outputs where they actually are.
+/// One output (monitor) and its workspaces, sorted by index. `x`/`y` are niri's
+/// logical position (used to order/place outputs) and `w` its logical width
+/// (used for proportional horizontal sizing). Height isn't kept — outputs are
+/// drawn full-height.
 struct OutputView {
     name: String,
     workspaces: Vec<WsView>,
     x: f64,
     y: f64,
     w: f64,
-    h: f64,
 }
 
 /// The full picture I draw, plus a flat navigation order over workspaces.
@@ -214,10 +215,10 @@ fn build_model() -> Result<Model, String> {
     }
 
     // Logical placement per output, so I can draw screens where niri puts them.
-    let geom: BTreeMap<String, (f64, f64, f64, f64)> = niri::fetch_outputs()
+    let geom: BTreeMap<String, (f64, f64, f64)> = niri::fetch_outputs()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|o| o.logical.map(|l| (o.name, (l.x, l.y, l.width, l.height))))
+        .filter_map(|o| o.logical.map(|l| (o.name, (l.x, l.y, l.width))))
         .collect();
 
     // Group workspaces by output.
@@ -241,12 +242,12 @@ fn build_model() -> Result<Model, String> {
                 WsView { ws, windows: wins }
             })
             .collect();
-        let (x, y, w, h) = geom.get(&name).copied().unwrap_or_else(|| {
-            let g = (fallback_x, 0.0, 1600.0, 900.0);
+        let (x, y, w) = geom.get(&name).copied().unwrap_or_else(|| {
+            let g = (fallback_x, 0.0, 1600.0);
             fallback_x += 1600.0;
             g
         });
-        outputs.push(OutputView { name, workspaces, x, y, w, h });
+        outputs.push(OutputView { name, workspaces, x, y, w });
     }
 
     // Order outputs left-to-right, then top-to-bottom, by logical position.
@@ -773,24 +774,21 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let content_w = w - 2.0 * PAD;
     let content_h = (h - PAD - FOOTER_H) - content_y;
 
-    // Place outputs by their real horizontal position and proportional size,
-    // but align all tops to a common edge — the configured vertical offset
-    // between screens (e.g. HDMI at y=360) would otherwise leave an empty band.
+    // Place outputs by their real horizontal position and proportional width,
+    // so the left/right arrangement is faithful. Vertically the axes are
+    // decoupled: tops align to the content top and every output uses the full
+    // height (the configured y-offset between screens isn't reproduced — it'd
+    // just waste space in a survey view).
     let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
     let max_x = outputs.iter().map(|o| o.x + o.w).fold(f64::NEG_INFINITY, f64::max);
-    let max_h = outputs.iter().map(|o| o.h).fold(0.0_f64, f64::max);
     let span_w = (max_x - min_x).max(1.0);
-    let span_h = max_h.max(1.0);
-    let scale = (content_w / span_w).min(content_h / span_h);
-    // Centre the scaled block within the content area.
-    let off_x = content_x + (content_w - span_w * scale) / 2.0;
-    let off_y = content_y + (content_h - span_h * scale) / 2.0;
+    let scale_x = content_w / span_w;
 
     for (i, output) in outputs.iter().enumerate() {
-        let ox = off_x + (output.x - min_x) * scale;
-        let oy = off_y;
-        let ow = output.w * scale;
-        let oh = output.h * scale;
+        let ox = content_x + (output.x - min_x) * scale_x;
+        let oy = content_y;
+        let ow = output.w * scale_x;
+        let oh = content_h;
 
         // Faint outline of the screen's extent.
         set_rgba(cr, 1.0, 1.0, 1.0, 0.05);
