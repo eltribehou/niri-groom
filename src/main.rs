@@ -2,8 +2,11 @@
 //! and windows as a proportional map, and lets me kill a whole workspace (`w`)
 //! or a single window (`x`) with no confirmation.
 
+mod config;
 mod niri;
+mod theme;
 
+use crate::theme::{Rgb, Theme};
 use gtk4 as gtk;
 
 use gtk::gdk;
@@ -165,7 +168,20 @@ struct State {
     sel_win: usize,
     /// When renaming, the in-overlay line editor for the selected workspace.
     editing: Option<Edit>,
+    /// All bundled themes, and the index of the saved (committed) one.
+    themes: Vec<Theme>,
+    theme_idx: usize,
+    /// When the theme picker is open, the highlighted theme index (applied live).
+    picker: Option<usize>,
     error: Option<String>,
+}
+
+impl State {
+    /// The theme to draw with: the picker's live highlight if open, else the
+    /// saved one.
+    fn theme(&self) -> &Theme {
+        &self.themes[self.picker.unwrap_or(self.theme_idx).min(self.themes.len() - 1)]
+    }
 }
 
 impl State {
@@ -342,11 +358,18 @@ fn build_ui(app: &Application) {
         outputs: Vec::new(),
         nav: Vec::new(),
     });
+    let themes = theme::all();
+    let theme_idx = config::load_theme()
+        .and_then(|name| theme::index_of(&name))
+        .unwrap_or(0);
     let state = Rc::new(RefCell::new(State {
         model,
         sel_nav: 0,
         sel_win: 0,
         editing: None,
+        themes,
+        theme_idx,
+        picker: None,
         error: None,
     }));
     // Open the overlay on the currently focused workspace.
@@ -541,9 +564,12 @@ fn handle_key(
     state: &Rc<RefCell<State>>,
     app: &Application,
 ) -> bool {
-    // While renaming, the whole keyboard feeds the edit buffer.
+    // While a modal is open it captures the keyboard.
     if state.borrow().editing.is_some() {
         return handle_edit_key(keyval, mods, state);
+    }
+    if state.borrow().picker.is_some() {
+        return handle_picker_key(keyval, state);
     }
 
     let ch = keyval.to_unicode();
@@ -572,6 +598,12 @@ fn handle_key(
             if let Some(name) = name {
                 state.borrow_mut().editing = Some(Edit::new(&name));
             }
+            true
+        }
+        // Open the theme picker.
+        (Some('t'), _) => {
+            let idx = state.borrow().theme_idx;
+            state.borrow_mut().picker = Some(idx);
             true
         }
         // Focus the selected workspace and dismiss the overlay (jump to it).
@@ -720,6 +752,52 @@ fn move_output(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     false
 }
 
+/// Handle a keystroke while the theme picker is open. Up/Down (or k/j) move and
+/// apply the theme live; Enter saves it to the config; Esc cancels and reverts.
+fn handle_picker_key(keyval: &gdk::Key, state: &Rc<RefCell<State>>) -> bool {
+    match *keyval {
+        gdk::Key::Escape => {
+            state.borrow_mut().picker = None;
+            true
+        }
+        gdk::Key::Return | gdk::Key::KP_Enter => {
+            let sel = state.borrow().picker;
+            if let Some(i) = sel {
+                let name = state.borrow().themes[i].name;
+                config::save_theme(name);
+                let mut s = state.borrow_mut();
+                s.theme_idx = i;
+                s.picker = None;
+            }
+            true
+        }
+        gdk::Key::Down => move_picker(state, 1),
+        gdk::Key::Up => move_picker(state, -1),
+        _ => match keyval.to_unicode() {
+            Some('j') => move_picker(state, 1),
+            Some('k') => move_picker(state, -1),
+            Some('q') => {
+                state.borrow_mut().picker = None;
+                true
+            }
+            _ => false,
+        },
+    }
+}
+
+fn move_picker(state: &Rc<RefCell<State>>, delta: i32) -> bool {
+    let mut s = state.borrow_mut();
+    let n = s.themes.len() as i32;
+    if let Some(cur) = s.picker {
+        let next = ((cur as i32 + delta).rem_euclid(n)) as usize;
+        if next != cur {
+            s.picker = Some(next);
+            return true;
+        }
+    }
+    false
+}
+
 fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     let mut s = state.borrow_mut();
     let count = s.sel_ws().map(|v| v.windows.len()).unwrap_or(0);
@@ -746,15 +824,13 @@ const OUTPUT_HEADER_H: f64 = 30.0;
 const WS_GAP: f64 = 12.0;
 const WS_HEADER_H: f64 = 28.0;
 
-/// Single accent colour used for selection and highlights.
-const ACCENT: (f64, f64, f64) = (0.40, 0.64, 1.0);
-
 fn set_rgba(cr: &gtk::cairo::Context, r: f64, g: f64, b: f64, a: f64) {
     cr.set_source_rgba(r, g, b, a);
 }
 
-fn set_accent(cr: &gtk::cairo::Context, a: f64) {
-    cr.set_source_rgba(ACCENT.0, ACCENT.1, ACCENT.2, a);
+/// Set the source to a theme color at alpha `a`.
+fn set(cr: &gtk::cairo::Context, c: Rgb, a: f64) {
+    cr.set_source_rgba(c.0, c.1, c.2, a);
 }
 
 /// Trace a rounded-rectangle path (caller fills/strokes it).
@@ -800,9 +876,11 @@ fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, s: &str) {
 }
 
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
+    let t = state.theme();
+
     // Opaque backdrop (a layer surface can't be forced opaque from niri config,
     // so the app draws it fully opaque for readability).
-    set_rgba(cr, 0.055, 0.062, 0.085, 1.0);
+    set(cr, t.bg, 1.0);
     cr.rectangle(0.0, 0.0, w, h);
     let _ = cr.fill();
 
@@ -812,10 +890,10 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         gtk::cairo::FontWeight::Normal,
     );
 
-    draw_footer(cr, w, h);
+    draw_footer(cr, w, h, t);
 
     if let Some(err) = &state.error {
-        set_rgba(cr, 1.0, 0.45, 0.45, 1.0);
+        set(cr, t.urgent, 1.0);
         cr.set_font_size(16.0);
         text_at(cr, PAD, PAD + 16.0, &format!("niri error: {err}"));
         return;
@@ -823,7 +901,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
 
     let outputs = &state.model.outputs;
     if outputs.is_empty() {
-        set_rgba(cr, 0.8, 0.8, 0.85, 1.0);
+        set(cr, t.subtext, 1.0);
         cr.set_font_size(16.0);
         text_at(cr, PAD, PAD + 16.0, "no workspaces found");
         return;
@@ -853,7 +931,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         let oh = content_h;
 
         // Subtle grouping panel for the screen's extent.
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.022);
+        set(cr, t.text, 0.03);
         rounded_rect(cr, ox, oy, ow, oh, 14.0);
         let _ = cr.fill();
 
@@ -863,7 +941,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Bold,
         );
-        set_rgba(cr, 0.74, 0.80, 0.92, 1.0);
+        set(cr, t.text, 0.85);
         cr.set_font_size(17.0);
         text_at(cr, ox + 12.0, oy + 21.0, &fit_text(cr, &output.name, ow - 24.0));
 
@@ -880,18 +958,20 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         for (j, wsv) in output.workspaces.iter().enumerate() {
             let wy = wy0 + j as f64 * (ws_h + WS_GAP);
             let ws_selected = sel == Some((i, j));
-            draw_workspace(cr, wx, wy, ww, ws_h, wsv, ws_selected, state.sel_win);
+            draw_workspace(cr, wx, wy, ww, ws_h, wsv, ws_selected, state.sel_win, t);
         }
     }
 
-    if let Some(edit) = &state.editing {
-        draw_rename(cr, w, h, edit);
+    if state.picker.is_some() {
+        draw_picker(cr, w, h, state);
+    } else if let Some(edit) = &state.editing {
+        draw_rename(cr, w, h, edit, t);
     }
 }
 
 /// A centered modal text field for renaming the selected workspace, with a
 /// caret drawn at the edit cursor.
-fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
+fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit, t: &Theme) {
     // Dim everything behind the field.
     set_rgba(cr, 0.0, 0.0, 0.0, 0.45);
     cr.rectangle(0.0, 0.0, w, h);
@@ -902,10 +982,10 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
     let bx = (w - bw) / 2.0;
     let by = (h - bh) / 2.0;
 
-    set_rgba(cr, 0.12, 0.14, 0.20, 0.99);
+    set(cr, t.surface, 1.0);
     rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.fill();
-    set_accent(cr, 1.0);
+    set(cr, t.accent, 1.0);
     cr.set_line_width(2.0);
     rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.stroke();
@@ -915,7 +995,7 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
         gtk::cairo::FontSlant::Normal,
         gtk::cairo::FontWeight::Normal,
     );
-    set_rgba(cr, 0.62, 0.68, 0.80, 1.0);
+    set(cr, t.subtext, 1.0);
     cr.set_font_size(12.0);
     text_at(
         cr,
@@ -933,19 +1013,109 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
     cr.rectangle(bx + 8.0, by + 32.0, bw - 16.0, bh - 40.0);
     cr.clip();
 
-    set_rgba(cr, 0.95, 0.96, 0.99, 1.0);
+    set(cr, t.text, 1.0);
     text_at(cr, text_x, text_y, &edit.text());
 
     // Caret: a thin vertical bar at the cursor's x-advance.
     let prefix: String = edit.buf[..edit.cursor].iter().collect();
     let caret_x = text_x + cr.text_extents(&prefix).map(|e| e.x_advance()).unwrap_or(0.0);
-    set_accent(cr, 1.0);
+    set(cr, t.accent, 1.0);
     cr.set_line_width(1.5);
     cr.move_to(caret_x, text_y - 17.0);
     cr.line_to(caret_x, text_y + 4.0);
     let _ = cr.stroke();
 
     let _ = cr.restore();
+}
+
+/// The theme picker modal: a list of themes with color swatches; the highlight
+/// is applied live to the whole overlay, so the panel itself recolors too.
+fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
+    let t = state.theme();
+    let hi = state.picker.unwrap_or(0);
+    let n = state.themes.len();
+
+    // Dim everything behind the panel.
+    set_rgba(cr, 0.0, 0.0, 0.0, 0.5);
+    cr.rectangle(0.0, 0.0, w, h);
+    let _ = cr.fill();
+
+    let row_h = 36.0;
+    let head_h = 50.0;
+    let bw = 400.0;
+    let bh = head_h + n as f64 * row_h + 12.0;
+    let bx = (w - bw) / 2.0;
+    let by = (h - bh) / 2.0;
+
+    set(cr, t.surface, 1.0);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
+    let _ = cr.fill();
+    set(cr, t.accent, 1.0);
+    cr.set_line_width(2.0);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
+    let _ = cr.stroke();
+
+    // Header.
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    set(cr, t.text, 1.0);
+    cr.set_font_size(16.0);
+    text_at(cr, bx + 16.0, by + 26.0, "Theme");
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Normal,
+    );
+    set(cr, t.subtext, 1.0);
+    cr.set_font_size(11.0);
+    text_at(cr, bx + 16.0, by + 42.0, "↑/↓ select · Enter save · Esc cancel");
+
+    // Rows.
+    for (i, th) in state.themes.iter().enumerate() {
+        let ry = by + head_h + i as f64 * row_h;
+
+        if i == hi {
+            set(cr, t.accent, 0.20);
+            rounded_rect(cr, bx + 6.0, ry, bw - 12.0, row_h - 2.0, 7.0);
+            let _ = cr.fill();
+        }
+
+        // Swatches: backdrop, accent, text.
+        let ss = 14.0;
+        let sy = ry + (row_h - ss) / 2.0 - 1.0;
+        for (k, c) in [th.bg, th.accent, th.text].into_iter().enumerate() {
+            let sx = bx + 16.0 + k as f64 * (ss + 4.0);
+            set(cr, c, 1.0);
+            rounded_rect(cr, sx, sy, ss, ss, 3.0);
+            let _ = cr.fill();
+            set(cr, t.text, 0.18);
+            cr.set_line_width(1.0);
+            rounded_rect(cr, sx, sy, ss, ss, 3.0);
+            let _ = cr.stroke();
+        }
+
+        // Name.
+        if i == hi {
+            cr.select_font_face(
+                "sans-serif",
+                gtk::cairo::FontSlant::Normal,
+                gtk::cairo::FontWeight::Bold,
+            );
+            set(cr, t.accent, 1.0);
+        } else {
+            cr.select_font_face(
+                "sans-serif",
+                gtk::cairo::FontSlant::Normal,
+                gtk::cairo::FontWeight::Normal,
+            );
+            set(cr, t.text, 0.95);
+        }
+        cr.set_font_size(14.0);
+        text_at(cr, bx + 16.0 + 3.0 * (ss + 4.0) + 8.0, ry + row_h / 2.0 + 5.0, th.name);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -958,27 +1128,28 @@ fn draw_workspace(
     wsv: &WsView,
     selected: bool,
     sel_win: usize,
+    t: &Theme,
 ) {
     const R: f64 = 10.0;
 
     // Workspace card background.
     if selected {
-        set_rgba(cr, 0.15, 0.18, 0.25, 1.0);
+        set(cr, t.selected_card(), 1.0);
     } else {
-        set_rgba(cr, 0.115, 0.125, 0.16, 1.0);
+        set(cr, t.surface, 1.0);
     }
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
     // Border: accent if selected, faint otherwise.
     if selected {
-        set_accent(cr, 1.0);
+        set(cr, t.accent, 1.0);
         cr.set_line_width(2.0);
     } else if wsv.ws.is_focused {
-        set_rgba(cr, 0.45, 0.55, 0.68, 0.7);
+        set(cr, t.accent, 0.45);
         cr.set_line_width(1.2);
     } else {
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
+        set(cr, t.text, 0.07);
         cr.set_line_width(1.0);
     }
     rounded_rect(cr, x, y, w, h, R);
@@ -992,17 +1163,17 @@ fn draw_workspace(
     );
     cr.set_font_size(15.0);
     if wsv.ws.is_urgent {
-        set_rgba(cr, 1.0, 0.6, 0.4, 1.0);
+        set(cr, t.urgent, 1.0);
     } else if selected {
-        set_accent(cr, 1.0);
+        set(cr, t.accent, 1.0);
     } else {
-        set_rgba(cr, 0.86, 0.89, 0.95, 1.0);
+        set(cr, t.text, 0.95);
     }
     let header = format!("{}   ({} win)", wsv.ws.label(), wsv.windows.len());
     text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, w - 22.0));
 
     // Thin separator under the header.
-    set_rgba(cr, 1.0, 1.0, 1.0, 0.06);
+    set(cr, t.text, 0.08);
     cr.set_line_width(1.0);
     cr.move_to(x + 10.0, y + WS_HEADER_H - 5.0);
     cr.line_to(x + w - 10.0, y + WS_HEADER_H - 5.0);
@@ -1020,7 +1191,7 @@ fn draw_workspace(
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Normal,
         );
-        set_rgba(cr, 0.5, 0.5, 0.56, 0.8);
+        set(cr, t.subtext, 0.75);
         cr.set_font_size(12.0);
         text_at(cr, inner_x + 2.0, inner_y + 18.0, "(empty)");
         return;
@@ -1046,7 +1217,7 @@ fn draw_workspace(
         for (r, (lin_idx, win)) in column.iter().enumerate() {
             let ry = inner_y + r as f64 * rh;
             let win_selected = selected && *lin_idx == sel_win;
-            draw_window(cr, cx + 3.0, ry + 3.0, cw - 6.0, rh - 6.0, win, win_selected);
+            draw_window(cr, cx + 3.0, ry + 3.0, cw - 6.0, rh - 6.0, win, win_selected, t);
         }
     }
 }
@@ -1059,6 +1230,7 @@ fn draw_window(
     h: f64,
     win: &niri::Window,
     selected: bool,
+    t: &Theme,
 ) {
     if w <= 2.0 || h <= 2.0 {
         return;
@@ -1066,27 +1238,27 @@ fn draw_window(
 
     const R: f64 = 7.0;
 
-    // Card fill. Selected windows get a blue tint (not a solid block) so the
+    // Card fill. Selected windows get an accent tint (not a solid block) so the
     // labels stay readable; the accent border carries the "selected" signal.
     if selected {
-        set_rgba(cr, 0.19, 0.32, 0.52, 1.0);
+        set(cr, t.selected_window(), 1.0);
     } else if win.is_focused {
-        set_rgba(cr, 0.21, 0.235, 0.30, 1.0);
+        set(cr, t.focused_window(), 1.0);
     } else {
-        set_rgba(cr, 0.165, 0.18, 0.225, 1.0);
+        set(cr, t.window, 1.0);
     }
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
     // Border.
     if win.is_urgent {
-        set_rgba(cr, 1.0, 0.45, 0.35, 1.0);
+        set(cr, t.urgent, 1.0);
         cr.set_line_width(1.8);
     } else if selected {
-        set_accent(cr, 1.0);
+        set(cr, t.accent, 1.0);
         cr.set_line_width(2.0);
     } else {
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
+        set(cr, t.text, 0.07);
         cr.set_line_width(1.0);
     }
     rounded_rect(cr, x, y, w, h, R);
@@ -1100,10 +1272,6 @@ fn draw_window(
     }
     let tx = x + 8.0;
 
-    let title_color = |cr: &gtk::cairo::Context| {
-        set_rgba(cr, 0.97, 0.98, 1.0, 1.0);
-    };
-
     if h >= 46.0 {
         // app id — secondary context line (regular weight).
         cr.select_font_face(
@@ -1111,11 +1279,7 @@ fn draw_window(
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Normal,
         );
-        if selected {
-            set_rgba(cr, 0.78, 0.86, 0.98, 1.0);
-        } else {
-            set_rgba(cr, 0.78, 0.83, 0.92, 1.0);
-        }
+        set(cr, t.subtext, 1.0);
         cr.set_font_size(13.0);
         if let Some(app_id) = &win.app_id {
             text_at(cr, tx, y + 20.0, &fit_text(cr, app_id, text_w));
@@ -1127,7 +1291,7 @@ fn draw_window(
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Bold,
         );
-        title_color(cr);
+        set(cr, t.text, 1.0);
         cr.set_font_size(15.0);
         text_at(cr, tx, y + 42.0, &fit_text(cr, &win.label(), text_w));
         cr.select_font_face(
@@ -1142,7 +1306,7 @@ fn draw_window(
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Bold,
         );
-        title_color(cr);
+        set(cr, t.text, 1.0);
         cr.set_font_size(14.0);
         text_at(cr, tx, y + h / 2.0 + 5.0, &fit_text(cr, &win.label(), text_w));
         cr.select_font_face(
@@ -1153,9 +1317,9 @@ fn draw_window(
     }
 }
 
-fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
+fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
     // Separator line above the footer.
-    set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
+    set(cr, t.text, 0.08);
     cr.set_line_width(1.0);
     cr.move_to(PAD, h - FOOTER_H + 4.0);
     cr.line_to(w - PAD, h - FOOTER_H + 4.0);
@@ -1166,9 +1330,9 @@ fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
         gtk::cairo::FontSlant::Normal,
         gtk::cairo::FontWeight::Normal,
     );
-    set_rgba(cr, 0.56, 0.61, 0.72, 1.0);
+    set(cr, t.subtext, 0.9);
     cr.set_font_size(13.0);
-    let help = "j/k ws · J/K move ws · H/L ws to screen · h/l win · ^H/^L move col · Tab screen · Enter focus · r rename · w kill ws · x kill win · q quit";
+    let help = "j/k ws · J/K move ws · H/L ws to screen · h/l win · ^H/^L move col · Tab screen · Enter focus · r rename · t theme · w kill ws · x kill win · q quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 11.0, &fitted);
 }

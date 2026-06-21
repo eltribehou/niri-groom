@@ -45,6 +45,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `Enter`        | Focus the selected workspace and dismiss the overlay |
 | `r`            | Rename the selected workspace (inline text field) |
+| `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
 | `x`            | Kill the selected window — no confirm     |
 | `q` / `Esc`    | Quit                                     |
@@ -64,6 +65,27 @@ works around this by first setting a throwaway intermediate name (a zero-width-s
 prefix) and then the real one, which forces the change through. I avoid the simpler
 unset-then-set because unsetting an empty workspace's name can let niri reclaim it
 mid-rename.
+
+## Theming and config
+
+Colors come from a `Theme` (`src/theme.rs`): a handful of base colors (bg /
+surface / window / text / subtext / accent / urgent); the extra shades the
+drawing needs (separators, subtle borders, selection tints) are *derived* from
+those — separators and borders are `text` at a low alpha, so the same code reads
+correctly on both dark and light palettes. Nine themes ship: catppuccin
+mocha/macchiato/latte, gruvbox material/light, tokyo-night, nord, dracula,
+rose-pine. Every color in the drawing pulls from the active theme; there are no
+hardcoded palette values left (only the dim-backdrop black behind modals).
+
+`t` opens an in-overlay picker (modal, keyboard-captured like rename) listing the
+themes with little color swatches. Moving the highlight (`j`/`k` or arrows)
+applies the theme **live** to the whole overlay; `Enter` saves it, `Esc` reverts.
+
+The config (`src/config.rs`) is `$XDG_CONFIG_HOME/niri-groom/niri-groom.kdl`
+(falling back to `~/.config/...`), created with the default on first run. It's
+read at startup and rewritten on save via the `kdl` crate, which round-trips the
+document so comments and any other keys survive. Schema today is just
+`theme "<name>"`. The default is catppuccin-mocha.
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so
@@ -98,6 +120,7 @@ otherwise deadlocks input until the app is killed).
 - **gtk4-layer-shell** (`gtk4-layer-shell` crate 0.8) to anchor the window as a
   fullscreen overlay surface and grab the keyboard.
 - **serde / serde_json** to parse the niri IPC output.
+- **kdl** (crate 6) to read/write the KDL config, preserving comments on save.
 
 Text is drawn with cairo's toy font API (`select_font_face` / `show_text`) and
 truncated with an ellipsis to fit — deliberately no pango dependency, the labels are
@@ -111,7 +134,11 @@ short.
 - `src/main.rs` — everything GTK. `build_model()` turns the IPC snapshot into the
   `Model` (outputs → workspaces → windows, plus a flat `nav` order for selection),
   `refresh()` rebuilds it while preserving the selection by id, the key handler, and
-  the cairo drawing functions (`draw` → `draw_workspace` → `draw_window`).
+  the cairo drawing functions (`draw` → `draw_workspace` → `draw_window`, plus
+  `draw_rename` / `draw_picker`).
+- `src/theme.rs` — the `Theme` struct, derived-color helpers, and the bundled
+  theme presets.
+- `src/config.rs` — locating, creating, reading and writing the KDL config.
 
 ## Dev environment
 

@@ -19,12 +19,25 @@ whole workspace or a single window from the keyboard, instantly.
 | `Tab` / `S-Tab` | Jump to the next / previous **screen**       |
 | `Enter`         | **Focus** the selected workspace and close the overlay |
 | `r`             | **Rename** the selected workspace (inline field, readline/Emacs keys) |
+| `t`             | Open the **theme** picker (live preview; Enter saves, Esc cancels) |
 | `w`             | Kill the selected workspace (all its windows) |
 | `x`             | Kill the selected window                     |
 | `q` / `Esc`     | Quit                                         |
 
 There is **no confirmation** — `w` and `x` kill immediately. Killing a workspace
 also drops its name so niri reclaims the empty workspace.
+
+## Themes
+
+Nine built-in themes — catppuccin (mocha/macchiato/latte), gruvbox
+(material/light), tokyo-night, nord, dracula, rose-pine. Press `t` to pick one
+with a live preview. The choice is saved to
+`$XDG_CONFIG_HOME/niri-groom/niri-groom.kdl` (created on first run; default
+catppuccin-mocha):
+
+```kdl
+theme "catppuccin-mocha"
+```
 
 ## Run
 
