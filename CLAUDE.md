@@ -19,6 +19,10 @@ workspace or a single window from the keyboard with no confirmation.
 - Draws each output's workspaces (stacked, labelled by name + window count), and
   the windows inside each workspace laid out by their real scrolling-layout position
   (`layout.pos_in_scrolling_layout` → column, row).
+- Hides unnamed empty workspaces. niri keeps a permanent trailing empty workspace
+  per monitor (plus transient empties after moves); these are scratch space that
+  can't be meaningfully killed, so showing them only confuses. Named empty
+  workspaces are kept (you can still rename or kill them).
 - Refreshes on an 800ms timer so the map keeps up with the compositor.
 - Kills windows with `niri msg action close-window --id <id>`. "Killing a workspace"
   means closing every window it holds (niri keeps named/empty workspaces around by
@@ -63,8 +67,11 @@ mid-rename.
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so
-niri reclaims the now-empty (formerly named) workspace instead of leaving it
-behind. Unnamed workspaces are reclaimed by niri automatically.
+it becomes an unnamed empty workspace — which is then hidden (see above) and
+reclaimed by niri. There's no niri action to remove a workspace directly; niri
+auto-reclaims empty unnamed workspaces (except the trailing one per monitor)
+when they lose focus, which is why hiding them is the clean answer rather than
+trying to force deletion.
 
 niri's `move-workspace-up`/`-down` only act on the *focused* workspace, and
 `focus-workspace` only resolves within the focused output. So moving the selected

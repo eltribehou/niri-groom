@@ -236,10 +236,17 @@ fn build_model() -> Result<Model, String> {
         wss.sort_by_key(|w| w.idx);
         let workspaces = wss
             .into_iter()
-            .map(|ws| {
+            .filter_map(|ws| {
                 let mut wins = by_ws.remove(&ws.id).unwrap_or_default();
                 wins.sort_by_key(|w| (w.column(), w.row(), w.id));
-                WsView { ws, windows: wins }
+                // Hide unnamed empty workspaces: these are niri's scratch space
+                // (the permanent trailing one plus any transient empties). They
+                // can't be meaningfully killed and only clutter the map. Named
+                // empty workspaces stay — `w` unsets the name and niri reclaims.
+                if wins.is_empty() && ws.name.is_none() {
+                    return None;
+                }
+                Some(WsView { ws, windows: wins })
             })
             .collect();
         let (x, y, w) = geom.get(&name).copied().unwrap_or_else(|| {
