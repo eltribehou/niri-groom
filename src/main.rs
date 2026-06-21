@@ -742,9 +742,9 @@ fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
 
 const PAD: f64 = 18.0;
 const FOOTER_H: f64 = 30.0;
-const OUTPUT_HEADER_H: f64 = 26.0;
+const OUTPUT_HEADER_H: f64 = 28.0;
 const WS_GAP: f64 = 10.0;
-const WS_HEADER_H: f64 = 22.0;
+const WS_HEADER_H: f64 = 26.0;
 
 fn set_rgba(cr: &gtk::cairo::Context, r: f64, g: f64, b: f64, a: f64) {
     cr.set_source_rgba(r, g, b, a);
@@ -839,9 +839,14 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         let _ = cr.fill();
 
         // Output header inside the top of its rectangle.
-        set_rgba(cr, 0.62, 0.70, 0.85, 1.0);
-        cr.set_font_size(15.0);
-        text_at(cr, ox + 2.0, oy + 16.0, &fit_text(cr, &output.name, ow - 4.0));
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Bold,
+        );
+        set_rgba(cr, 0.72, 0.78, 0.90, 1.0);
+        cr.set_font_size(17.0);
+        text_at(cr, ox + 2.0, oy + 20.0, &fit_text(cr, &output.name, ow - 4.0));
 
         let wy0 = oy + OUTPUT_HEADER_H;
         let avail_h = oh - OUTPUT_HEADER_H;
@@ -948,7 +953,12 @@ fn draw_workspace(
     let _ = cr.stroke();
 
     // Workspace header label.
-    cr.set_font_size(13.0);
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(15.0);
     if wsv.ws.is_urgent {
         set_rgba(cr, 1.0, 0.6, 0.4, 1.0);
     } else if selected {
@@ -957,7 +967,7 @@ fn draw_workspace(
         set_rgba(cr, 0.85, 0.88, 0.94, 1.0);
     }
     let header = format!("{}  ({} win)", wsv.ws.label(), wsv.windows.len());
-    text_at(cr, x + 7.0, y + 15.0, &fit_text(cr, &header, w - 14.0));
+    text_at(cr, x + 7.0, y + 18.0, &fit_text(cr, &header, w - 14.0));
 
     // Window area.
     let inner_x = x + 6.0;
@@ -966,6 +976,11 @@ fn draw_workspace(
     let inner_h = h - WS_HEADER_H - 6.0;
 
     if wsv.windows.is_empty() {
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
         set_rgba(cr, 0.5, 0.5, 0.55, 0.8);
         cr.set_font_size(12.0);
         text_at(cr, inner_x + 4.0, inner_y + 18.0, "(empty)");
@@ -1048,7 +1063,12 @@ fn draw_window(
     };
 
     if h >= 46.0 {
-        // app id — secondary context line.
+        // app id — secondary context line (regular weight).
+        cr.select_font_face(
+            "sans-serif",
+            gtk::cairo::FontSlant::Normal,
+            gtk::cairo::FontWeight::Normal,
+        );
         if selected {
             set_rgba(cr, 0.06, 0.11, 0.20, 1.0);
         } else {
