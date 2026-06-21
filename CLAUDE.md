@@ -102,6 +102,23 @@ columns — then the freeze lifts and the event stream syncs the result. Drop
 indices are mapped through neighbours' real niri indices so hidden trailing empty
 workspaces don't offset them.
 
+## Command-line options
+
+- `--solo <monitor>` — start in solo mode showing only that output, and place the
+  overlay on it (via `gtk4-layer-shell` `set_monitor`). If no output matches the
+  name, it's ignored (normal multi-screen view). Good for a dedicated map on one
+  screen.
+- `--app-id <id>` — set the `GApplication` application id (default
+  `io.iwd.niri-groom`). Since single-instance is keyed on the app id, a second
+  instance with a *different* id runs independently — e.g. a persistent map
+  alongside the `Mod+G` grooming instance. An invalid id falls back to the
+  default.
+
+Args are parsed by `parse_args()` before the app is built, and the app is run
+with `run_with_args` passing only argv[0] so `GApplication` doesn't try to parse
+our flags. A typical autostart map: `niri-groom --solo eDP-1 --app-id
+io.iwd.niri-groom-map`.
+
 ## Theming and config
 
 Colors come from a `Theme` (`src/theme.rs`): a handful of base colors (bg /

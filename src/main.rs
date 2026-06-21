@@ -407,13 +407,78 @@ fn refresh(state: &Rc<RefCell<State>>) {
     }
 }
 
-fn main() -> glib::ExitCode {
-    let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build_ui);
-    app.run()
+/// Parsed command-line options.
+struct Opts {
+    /// Start in solo mode on the output with this name (if it exists).
+    solo_monitor: Option<String>,
 }
 
-fn build_ui(app: &Application) {
+fn parse_args() -> (String, Opts) {
+    let argv: Vec<String> = std::env::args().collect();
+    let mut app_id = APP_ID.to_string();
+    let mut solo_monitor = None;
+    let mut i = 1;
+    while i < argv.len() {
+        let arg = argv[i].clone();
+        let (key, inline) = match arg.split_once('=') {
+            Some((k, v)) => (k, Some(v.to_string())),
+            None => (arg.as_str(), None),
+        };
+        if matches!(key, "--app-id" | "--solo") {
+            let val = if inline.is_some() {
+                inline
+            } else {
+                i += 1;
+                argv.get(i).cloned()
+            };
+            match key {
+                "--app-id" => {
+                    if let Some(v) = val {
+                        app_id = v;
+                    }
+                }
+                "--solo" => solo_monitor = val,
+                _ => unreachable!(),
+            }
+        }
+        i += 1;
+    }
+    if !gtk::gio::Application::id_is_valid(&app_id) {
+        app_id = APP_ID.to_string();
+    }
+    (app_id, Opts { solo_monitor })
+}
+
+fn main() -> glib::ExitCode {
+    let (app_id, opts) = parse_args();
+    let app = Application::builder().application_id(&app_id).build();
+    let opts = Rc::new(opts);
+    app.connect_activate(move |a| build_ui(a, &opts));
+    // Don't let GApplication try to parse our own flags.
+    let argv0 = std::env::args()
+        .next()
+        .unwrap_or_else(|| "niri-groom".into());
+    app.run_with_args(&[argv0])
+}
+
+/// The gdk monitor whose connector matches `name`.
+fn gdk_monitor_by_name(name: &str) -> Option<gdk::Monitor> {
+    let display = gdk::Display::default()?;
+    let monitors = display.monitors();
+    for i in 0..monitors.n_items() {
+        if let Some(mon) = monitors
+            .item(i)
+            .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+        {
+            if mon.connector().as_deref() == Some(name) {
+                return Some(mon);
+            }
+        }
+    }
+    None
+}
+
+fn build_ui(app: &Application, opts: &Opts) {
     // Single-instance: GApplication forwards a second launch's `activate` to the
     // already-running instance. Pressing the keybind again would otherwise stack
     // a second layer-shell overlay, and two exclusive keyboard grabs deadlock
@@ -431,6 +496,11 @@ fn build_ui(app: &Application) {
     let theme_idx = config::load_theme()
         .and_then(|name| theme::index_of(&name))
         .unwrap_or(0);
+    // --solo <name>: start with only that output shown, if it exists.
+    let solo = opts
+        .solo_monitor
+        .as_ref()
+        .and_then(|name| model.outputs.iter().position(|o| &o.name == name));
     let state = Rc::new(RefCell::new(State {
         model,
         sel_nav: 0,
@@ -441,16 +511,24 @@ fn build_ui(app: &Application) {
         picker: None,
         show_help: false,
         active: true,
-        solo: None,
+        solo,
         drag: None,
         anim_ws: HashMap::new(),
         anim_col: HashMap::new(),
         error: None,
     }));
-    // Open the overlay on the currently focused workspace.
+    // Start the selection on the solo'd output (if any), else where focus is.
     {
         let mut s = state.borrow_mut();
-        s.sel_nav = s.focused_nav();
+        s.sel_nav = match solo {
+            Some(o) => s
+                .model
+                .nav
+                .iter()
+                .position(|&(oo, _)| oo == o)
+                .unwrap_or_else(|| s.focused_nav()),
+            None => s.focused_nav(),
+        };
     }
 
     let window = ApplicationWindow::builder()
@@ -477,6 +555,15 @@ fn build_ui(app: &Application) {
     window.set_keyboard_mode(KeyboardMode::Exclusive);
     for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
         window.set_anchor(edge, true);
+    }
+    // With --solo, also place the overlay on that monitor (not just show its
+    // content) so it reads as a map dedicated to that screen.
+    if let Some(mon) = opts
+        .solo_monitor
+        .as_ref()
+        .and_then(|name| gdk_monitor_by_name(name))
+    {
+        window.set_monitor(Some(&mon));
     }
 
     let area = DrawingArea::new();
