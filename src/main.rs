@@ -212,6 +212,8 @@ struct State {
     /// it's left running as a map on another monitor), the groom selection is
     /// hidden so only niri's own focus highlight remains.
     active: bool,
+    /// When `Some(o)`, "solo" mode: only output `o` is shown, full-width.
+    solo: Option<usize>,
     /// In-progress pointer drag (freezes refresh so the layout stays put).
     drag: Option<Drag>,
     /// Eased on-screen top-left per workspace id and per column, so neighbours
@@ -439,6 +441,7 @@ fn build_ui(app: &Application) {
         picker: None,
         show_help: false,
         active: true,
+        solo: None,
         drag: None,
         anim_ws: HashMap::new(),
         anim_col: HashMap::new(),
@@ -517,7 +520,7 @@ fn build_ui(app: &Application) {
                 if s.editing.is_some() || s.picker.is_some() {
                     None
                 } else {
-                    let layout = compute_layout(&s.model, w, h);
+                    let layout = compute_layout(&s.model, w, h, s.solo);
                     hit_workspace_header(&layout, &s.model, x, y)
                         .or_else(|| hit_column(&layout, &s.model, x, y))
                 }
@@ -834,6 +837,16 @@ fn handle_key(
             state.borrow_mut().picker = Some(idx);
             true
         }
+        // Solo the selected monitor (toggle): show only it, full-width.
+        (Some('s'), _) => {
+            let mut s = state.borrow_mut();
+            s.solo = if s.solo.is_some() {
+                None
+            } else {
+                Some(s.sel_output())
+            };
+            true
+        }
         // Focus the selected window (or the workspace if it's empty), then jump
         // to it. Only dismiss the overlay if the target is on the overlay's own
         // monitor — otherwise the overlay stays as a map on its screen while you
@@ -916,12 +929,16 @@ fn handle_key(
 
 fn move_ws(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     let mut s = state.borrow_mut();
-    let n = s.model.nav.len();
-    if n == 0 {
+    // Candidate nav indices: all, or only the solo output's.
+    let solo = s.solo;
+    let nav: Vec<usize> = (0..s.model.nav.len())
+        .filter(|&i| solo.is_none_or(|o| s.model.nav[i].0 == o))
+        .collect();
+    if nav.is_empty() {
         return false;
     }
-    let cur = s.sel_nav as i32;
-    let next = (cur + delta).clamp(0, n as i32 - 1) as usize;
+    let pos = nav.iter().position(|&i| i == s.sel_nav).unwrap_or(0) as i32;
+    let next = nav[(pos + delta).clamp(0, nav.len() as i32 - 1) as usize];
     if next != s.sel_nav {
         s.sel_nav = next;
         s.sel_win = 0;
@@ -998,6 +1015,10 @@ fn move_output(state: &Rc<RefCell<State>>, delta: i32) -> bool {
         if idx != s.sel_nav {
             s.sel_nav = idx;
             s.sel_win = 0;
+            // In solo mode, switching screens swaps which one is shown.
+            if s.solo.is_some() {
+                s.solo = Some(next);
+            }
             return true;
         }
     }
@@ -1167,7 +1188,65 @@ struct Layout {
     workspaces: Vec<WsLayout>,
 }
 
-fn compute_layout(model: &Model, w: f64, h: f64) -> Layout {
+/// Lay out one output's workspace cards (and their columns) into `rect`.
+fn layout_output(model: &Model, o: usize, rect: (f64, f64, f64, f64), layout: &mut Layout) {
+    let (ox, oy, ow, oh) = rect;
+    let output = &model.outputs[o];
+    let wx = ox + 8.0;
+    let ww = ow - 16.0;
+    let wy0 = oy + OUTPUT_HEADER_H;
+    let avail_h = oh - OUTPUT_HEADER_H - 8.0;
+    let m = output.workspaces.len();
+    if m == 0 {
+        return;
+    }
+    let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(28.0);
+
+    for (j, wsv) in output.workspaces.iter().enumerate() {
+        let wy = wy0 + j as f64 * (ws_h + WS_GAP);
+        let mut cols: Vec<ColLayout> = Vec::new();
+        if !wsv.windows.is_empty() {
+            let inner_x = wx + 9.0;
+            let inner_y = wy + WS_HEADER_H;
+            let inner_w = ww - 18.0;
+            let inner_h = ws_h - WS_HEADER_H - 9.0;
+
+            // Group consecutive windows sharing a niri column.
+            let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
+            let mut last: Option<i64> = None;
+            for (idx, win) in wsv.windows.iter().enumerate() {
+                let c = win.column();
+                if last != Some(c) {
+                    groups.push((c, Vec::new()));
+                    last = Some(c);
+                }
+                groups.last_mut().unwrap().1.push(idx);
+            }
+            let cw = inner_w / groups.len() as f64;
+            for (k, (col, lins)) in groups.into_iter().enumerate() {
+                cols.push(ColLayout {
+                    col,
+                    win_lin: lins,
+                    x: inner_x + k as f64 * cw,
+                    y: inner_y,
+                    w: cw,
+                    h: inner_h,
+                });
+            }
+        }
+        layout.workspaces.push(WsLayout {
+            o,
+            wi: j,
+            x: wx,
+            y: wy,
+            w: ww,
+            h: ws_h,
+            cols,
+        });
+    }
+}
+
+fn compute_layout(model: &Model, w: f64, h: f64, solo: Option<usize>) -> Layout {
     let mut layout = Layout {
         outputs: Vec::new(),
         workspaces: Vec::new(),
@@ -1182,6 +1261,20 @@ fn compute_layout(model: &Model, w: f64, h: f64) -> Layout {
     let content_w = w - 2.0 * PAD;
     let content_h = (h - PAD - FOOTER_H) - content_y;
 
+    // Solo mode: one output takes the whole content width.
+    if let Some(o) = solo.filter(|o| *o < outputs.len()) {
+        let rect = (content_x, content_y, content_w, content_h);
+        layout.outputs.push(OutLayout {
+            o,
+            x: rect.0,
+            y: rect.1,
+            w: rect.2,
+            h: rect.3,
+        });
+        layout_output(model, o, rect, &mut layout);
+        return layout;
+    }
+
     let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
     let max_x = outputs
         .iter()
@@ -1191,70 +1284,20 @@ fn compute_layout(model: &Model, w: f64, h: f64) -> Layout {
     let scale_x = content_w / span_w;
 
     for (i, output) in outputs.iter().enumerate() {
-        let ox = content_x + (output.x - min_x) * scale_x;
-        let oy = content_y;
-        let ow = output.w * scale_x;
-        let oh = content_h;
+        let rect = (
+            content_x + (output.x - min_x) * scale_x,
+            content_y,
+            output.w * scale_x,
+            content_h,
+        );
         layout.outputs.push(OutLayout {
             o: i,
-            x: ox,
-            y: oy,
-            w: ow,
-            h: oh,
+            x: rect.0,
+            y: rect.1,
+            w: rect.2,
+            h: rect.3,
         });
-
-        let wx = ox + 8.0;
-        let ww = ow - 16.0;
-        let wy0 = oy + OUTPUT_HEADER_H;
-        let avail_h = oh - OUTPUT_HEADER_H - 8.0;
-        let m = output.workspaces.len();
-        if m == 0 {
-            continue;
-        }
-        let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(28.0);
-
-        for (j, wsv) in output.workspaces.iter().enumerate() {
-            let wy = wy0 + j as f64 * (ws_h + WS_GAP);
-            let mut cols: Vec<ColLayout> = Vec::new();
-            if !wsv.windows.is_empty() {
-                let inner_x = wx + 9.0;
-                let inner_y = wy + WS_HEADER_H;
-                let inner_w = ww - 18.0;
-                let inner_h = ws_h - WS_HEADER_H - 9.0;
-
-                // Group consecutive windows sharing a niri column.
-                let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
-                let mut last: Option<i64> = None;
-                for (idx, win) in wsv.windows.iter().enumerate() {
-                    let c = win.column();
-                    if last != Some(c) {
-                        groups.push((c, Vec::new()));
-                        last = Some(c);
-                    }
-                    groups.last_mut().unwrap().1.push(idx);
-                }
-                let cw = inner_w / groups.len() as f64;
-                for (k, (col, lins)) in groups.into_iter().enumerate() {
-                    cols.push(ColLayout {
-                        col,
-                        win_lin: lins,
-                        x: inner_x + k as f64 * cw,
-                        y: inner_y,
-                        w: cw,
-                        h: inner_h,
-                    });
-                }
-            }
-            layout.workspaces.push(WsLayout {
-                o: i,
-                wi: j,
-                x: wx,
-                y: wy,
-                w: ww,
-                h: ws_h,
-                cols,
-            });
-        }
+        layout_output(model, i, rect, &mut layout);
     }
     layout
 }
@@ -1467,7 +1510,7 @@ fn recompute_target(state: &Rc<RefCell<State>>, w: f64, h: f64) {
         return;
     };
     let kind = s.drag.as_ref().unwrap().kind.clone();
-    let layout = compute_layout(&s.model, w, h);
+    let layout = compute_layout(&s.model, w, h, s.solo);
     let target = match &kind {
         DragKind::Workspace { id } => workspace_drop_target(&layout, &s.model, *id, cursor),
         DragKind::Column { ws_id, col, .. } => {
@@ -1494,7 +1537,7 @@ fn animate_step(state: &Rc<RefCell<State>>, w: f64, h: f64) -> bool {
         if !drag.active {
             return true;
         }
-        let layout = compute_layout(&s.model, w, h);
+        let layout = compute_layout(&s.model, w, h, s.solo);
         match &drag.kind {
             DragKind::Workspace { .. } => Targets::Ws(workspace_reflow(&layout, &s.model, drag)),
             DragKind::Column { .. } => Targets::Col(column_reflow(&layout, &s.model, drag)),
@@ -1645,7 +1688,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         None
     };
 
-    let layout = compute_layout(&state.model, w, h);
+    let layout = compute_layout(&state.model, w, h, state.solo);
 
     // Output panels + headers.
     for ol in &layout.outputs {
@@ -2169,7 +2212,7 @@ fn key_legend() -> [(&'static str, &'static str); 3] {
         ("Window", "h/l prev/next · Ctrl+H/L move column · x kill"),
         (
             "General",
-            "Tab switch screen · Enter focus · t theme · q quit",
+            "Tab switch screen · s solo screen · Enter focus · t theme · q quit",
         ),
     ]
 }

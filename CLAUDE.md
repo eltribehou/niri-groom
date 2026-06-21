@@ -49,6 +49,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Ctrl+L`       | Move the selected window's column right within the workspace |
 | `Ctrl+H`       | Move the selected window's column left within the workspace |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
+| `s`            | Solo the selected monitor (toggle): show only it, full-width; `Tab` then swaps which one |
 | `Enter`        | Focus the selected window (or workspace if empty); dismiss the overlay only if the target is on the overlay's own monitor |
 | `r`            | Rename the selected workspace (inline text field) |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
@@ -72,6 +73,12 @@ works around this by first setting a throwaway intermediate name (a zero-width-s
 prefix) and then the real one, which forces the change through. I avoid the simpler
 unset-then-set because unsetting an empty workspace's name can let niri reclaim it
 mid-rename.
+
+`s` toggles **solo mode** (`State::solo: Option<usize>`): only the selected
+output is shown, laid out full-width (`compute_layout` takes a `solo` arg and
+`layout_output` places that one output across the whole content area). While
+solo, `j`/`k` navigation is confined to that output and `Tab` swaps which output
+is solo'd. Press `s` again to show all screens.
 
 ## Mouse drag-and-drop
 
