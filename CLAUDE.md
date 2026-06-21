@@ -75,6 +75,13 @@ The overlay uses `KeyboardMode::Exclusive`, so while it is open it grabs the who
 keyboard. That's intentional (it's a transient modal tool), but it means I should
 **never run it unattended without an auto-kill timeout** — see Testing below.
 
+It's single-instance: `GApplication` (the default unique behaviour, keyed on the
+app id) forwards a second launch's `activate` to the running instance and the
+second process exits. The `activate` handler (`build_ui`) guards on
+`app.windows()` — if a window already exists it just `present()`s it and returns,
+so pressing the keybind twice can't stack two exclusive keyboard grabs (which
+otherwise deadlocks input until the app is killed).
+
 ## Tech stack
 
 - **Rust** — matches niri itself; single binary, no runtime deps beyond the GTK libs.

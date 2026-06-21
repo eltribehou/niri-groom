@@ -322,6 +322,15 @@ fn main() -> glib::ExitCode {
 }
 
 fn build_ui(app: &Application) {
+    // Single-instance: GApplication forwards a second launch's `activate` to the
+    // already-running instance. Pressing the keybind again would otherwise stack
+    // a second layer-shell overlay, and two exclusive keyboard grabs deadlock
+    // input. So if a window already exists, just raise it and bail.
+    if let Some(win) = app.windows().into_iter().next() {
+        win.present();
+        return;
+    }
+
     let model = build_model().unwrap_or(Model {
         outputs: Vec::new(),
         nav: Vec::new(),
