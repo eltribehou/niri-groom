@@ -84,6 +84,22 @@ impl Workspace {
     }
 }
 
+/// An output's position and size in niri's logical coordinate space.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Logical {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Output {
+    pub name: String,
+    /// Absent when the output is disabled/off.
+    pub logical: Option<Logical>,
+}
+
 fn niri_json<T: serde::de::DeserializeOwned>(subcommand: &str) -> Result<T, String> {
     let out = Command::new("niri")
         .args(["msg", "--json", subcommand])
@@ -104,6 +120,13 @@ pub fn fetch_workspaces() -> Result<Vec<Workspace>, String> {
 
 pub fn fetch_windows() -> Result<Vec<Window>, String> {
     niri_json("windows")
+}
+
+/// `niri msg --json outputs` is an object keyed by connector name; I just want
+/// the values (each carries its own `name`).
+pub fn fetch_outputs() -> Result<Vec<Output>, String> {
+    let map: std::collections::BTreeMap<String, Output> = niri_json("outputs")?;
+    Ok(map.into_values().collect())
 }
 
 /// Run `niri msg action <args...>`.

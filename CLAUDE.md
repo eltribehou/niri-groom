@@ -9,7 +9,12 @@ workspace or a single window from the keyboard with no confirmation.
 ## What it does
 
 - Reads the live state via `niri msg --json workspaces` and `niri msg --json windows`.
-- Draws each output, its workspaces (stacked, labelled by name + window count), and
+- Places each output where niri actually has it: `niri msg --json outputs` gives
+  every output's `logical` rectangle (x/y/width/height), and I map those into the
+  view proportionally (preserving relative position and size), so a screen on the
+  left/right/below shows up there. Falls back to a synthetic row if positions are
+  unavailable.
+- Draws each output's workspaces (stacked, labelled by name + window count), and
   the windows inside each workspace laid out by their real scrolling-layout position
   (`layout.pos_in_scrolling_layout` → column, row).
 - Refreshes on an 800ms timer so the map keeps up with the compositor.
@@ -82,9 +87,9 @@ short.
 
 ## Layout of the code
 
-- `src/niri.rs` — the IPC layer. `Workspace` / `Window` deserialization, helpers
-  (`label()`, `column()`, `row()`), and the `fetch_*` / `close_window` calls. This is
-  the only module that shells out to `niri`.
+- `src/niri.rs` — the IPC layer. `Workspace` / `Window` / `Output` deserialization,
+  helpers (`label()`, `column()`, `row()`), and the `fetch_*` / `close_window` /
+  rename / move calls. This is the only module that shells out to `niri`.
 - `src/main.rs` — everything GTK. `build_model()` turns the IPC snapshot into the
   `Model` (outputs → workspaces → windows, plus a flat `nav` order for selection),
   `refresh()` rebuilds it while preserving the selection by id, the key handler, and

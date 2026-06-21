@@ -24,10 +24,15 @@ struct WsView {
     windows: Vec<niri::Window>,
 }
 
-/// One output (monitor) and its workspaces, sorted by index.
+/// One output (monitor) and its workspaces, sorted by index. The `x`/`y`/`w`/`h`
+/// are niri's logical placement, so I can draw outputs where they actually are.
 struct OutputView {
     name: String,
     workspaces: Vec<WsView>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
 }
 
 /// The full picture I draw, plus a flat navigation order over workspaces.
@@ -208,26 +213,55 @@ fn build_model() -> Result<Model, String> {
         }
     }
 
-    // Group workspaces by output (sorted by output name for stability).
+    // Logical placement per output, so I can draw screens where niri puts them.
+    let geom: BTreeMap<String, (f64, f64, f64, f64)> = niri::fetch_outputs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|o| o.logical.map(|l| (o.name, (l.x, l.y, l.width, l.height))))
+        .collect();
+
+    // Group workspaces by output.
     let mut by_output: BTreeMap<String, Vec<niri::Workspace>> = BTreeMap::new();
     for ws in workspaces {
         let out = ws.output.clone().unwrap_or_else(|| "?".to_string());
         by_output.entry(out).or_default().push(ws);
     }
 
-    let mut outputs = Vec::new();
-    let mut nav = Vec::new();
+    // Build an OutputView per output, falling back to a synthetic horizontal row
+    // for any output niri didn't report geometry for (disabled, or no `outputs`).
+    let mut fallback_x = 0.0;
+    let mut outputs: Vec<OutputView> = Vec::new();
     for (name, mut wss) in by_output {
         wss.sort_by_key(|w| w.idx);
-        let o_idx = outputs.len();
-        let mut workspaces = Vec::new();
-        for ws in wss {
-            let mut wins = by_ws.remove(&ws.id).unwrap_or_default();
-            wins.sort_by_key(|w| (w.column(), w.row(), w.id));
-            nav.push((o_idx, workspaces.len()));
-            workspaces.push(WsView { ws, windows: wins });
+        let workspaces = wss
+            .into_iter()
+            .map(|ws| {
+                let mut wins = by_ws.remove(&ws.id).unwrap_or_default();
+                wins.sort_by_key(|w| (w.column(), w.row(), w.id));
+                WsView { ws, windows: wins }
+            })
+            .collect();
+        let (x, y, w, h) = geom.get(&name).copied().unwrap_or_else(|| {
+            let g = (fallback_x, 0.0, 1600.0, 900.0);
+            fallback_x += 1600.0;
+            g
+        });
+        outputs.push(OutputView { name, workspaces, x, y, w, h });
+    }
+
+    // Order outputs left-to-right, then top-to-bottom, by logical position.
+    outputs.sort_by(|a, b| {
+        a.x.partial_cmp(&b.x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    // Flat nav order over all workspaces, following the output order above.
+    let mut nav = Vec::new();
+    for (o_idx, output) in outputs.iter().enumerate() {
+        for w_idx in 0..output.workspaces.len() {
+            nav.push((o_idx, w_idx));
         }
-        outputs.push(OutputView { name, workspaces });
     }
 
     Ok(Model { outputs, nav })
@@ -667,7 +701,6 @@ const PAD: f64 = 18.0;
 const FOOTER_H: f64 = 30.0;
 const OUTPUT_HEADER_H: f64 = 26.0;
 const WS_GAP: f64 = 10.0;
-const OUT_GAP: f64 = 16.0;
 const WS_HEADER_H: f64 = 22.0;
 
 fn set_rgba(cr: &gtk::cairo::Context, r: f64, g: f64, b: f64, a: f64) {
@@ -738,36 +771,49 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let content_x = PAD;
     let content_y = PAD;
     let content_w = w - 2.0 * PAD;
-    let content_bottom = h - PAD - FOOTER_H;
+    let content_h = (h - PAD - FOOTER_H) - content_y;
 
-    let n = outputs.len();
-    let col_w = (content_w - (n as f64 - 1.0) * OUT_GAP) / n as f64;
+    // Map niri's logical output rectangles into the content area, preserving
+    // their relative positions and proportions (like the real overview).
+    let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
+    let min_y = outputs.iter().map(|o| o.y).fold(f64::INFINITY, f64::min);
+    let max_x = outputs.iter().map(|o| o.x + o.w).fold(f64::NEG_INFINITY, f64::max);
+    let max_y = outputs.iter().map(|o| o.y + o.h).fold(f64::NEG_INFINITY, f64::max);
+    let span_w = (max_x - min_x).max(1.0);
+    let span_h = (max_y - min_y).max(1.0);
+    let scale = (content_w / span_w).min(content_h / span_h);
+    // Centre the scaled bounding box within the content area.
+    let off_x = content_x + (content_w - span_w * scale) / 2.0;
+    let off_y = content_y + (content_h - span_h * scale) / 2.0;
 
     for (i, output) in outputs.iter().enumerate() {
-        let ox = content_x + i as f64 * (col_w + OUT_GAP);
+        let ox = off_x + (output.x - min_x) * scale;
+        let oy = off_y + (output.y - min_y) * scale;
+        let ow = output.w * scale;
+        let oh = output.h * scale;
 
-        // Output header.
+        // Faint outline of the screen's extent.
+        set_rgba(cr, 1.0, 1.0, 1.0, 0.05);
+        cr.rectangle(ox, oy, ow, oh);
+        let _ = cr.fill();
+
+        // Output header inside the top of its rectangle.
         set_rgba(cr, 0.62, 0.70, 0.85, 1.0);
         cr.set_font_size(15.0);
-        text_at(
-            cr,
-            ox,
-            content_y + 16.0,
-            &fit_text(cr, &output.name, col_w),
-        );
+        text_at(cr, ox + 2.0, oy + 16.0, &fit_text(cr, &output.name, ow - 4.0));
 
-        let wy0 = content_y + OUTPUT_HEADER_H;
-        let avail_h = content_bottom - wy0;
+        let wy0 = oy + OUTPUT_HEADER_H;
+        let avail_h = oh - OUTPUT_HEADER_H;
         let m = output.workspaces.len();
         if m == 0 {
             continue;
         }
-        let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(40.0);
+        let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(28.0);
 
         for (j, wsv) in output.workspaces.iter().enumerate() {
             let wy = wy0 + j as f64 * (ws_h + WS_GAP);
             let ws_selected = sel == Some((i, j));
-            draw_workspace(cr, ox, wy, col_w, ws_h, wsv, ws_selected, state.sel_win);
+            draw_workspace(cr, ox, wy, ow, ws_h, wsv, ws_selected, state.sel_win);
         }
     }
 
