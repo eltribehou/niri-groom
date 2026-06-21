@@ -163,41 +163,6 @@ automatically on `cd`. Run `direnv allow` once.
 `nix build` produces a standalone binary at `./result/bin/niri-groom`, and
 `nix run` builds and runs it.
 
-## Deploying with home-manager
-
-The flake exposes `packages.default` (built with `buildRustPackage` + wrapped by
-`wrapGAppsHook4`, so the GTK runtime env is set up). I install it through my
-home-manager flake and bind it to a niri key, so day-to-day it's just the
-`niri-groom` command — no `nix run`.
-
-In the home-manager flake `inputs`:
-
-```nix
-niri-groom.url = "path:/home/sam/proj/perso/niri-groom";
-# (or a git remote once pushed, e.g. "git+ssh://…/niri-groom")
-```
-
-In a home-manager module (make `inputs` available via `extraSpecialArgs`):
-
-```nix
-{ inputs, pkgs, ... }:
-{
-  home.packages = [ inputs.niri-groom.packages.${pkgs.system}.default ];
-}
-```
-
-Then bind it in the niri config (KDL):
-
-```kdl
-binds {
-    Mod+Shift+K { spawn "niri-groom"; }
-}
-```
-
-After editing the binary's source I rebuild the home-manager generation
-(`home-manager switch --flake …`, bumping the flake input with
-`nix flake lock --update-input niri-groom` if it's pinned) to pick up changes.
-
 ## Testing / running safely
 
 Because the overlay grabs the keyboard exclusively, verify it with an auto-kill so a

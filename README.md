@@ -66,10 +66,10 @@ cargo build --release      # → ./target/release/niri-groom
 cargo install --path .     # → ~/.cargo/bin/niri-groom
 ```
 
-### With Nix (reproducible, no system deps needed)
+### With Nix 
 
 If you use [Nix](https://nixos.org/) with flakes, the flake pins the entire
-toolchain and GTK stack — nothing is installed globally:
+toolchain and GTK stack. 
 
 ```sh
 nix run                    # build and launch
@@ -79,6 +79,3 @@ nix develop                # dev shell with cargo, clippy, rustfmt, GTK…
 
 With [direnv](https://direnv.net/), `direnv allow` loads the dev shell
 automatically on `cd`.
-
-To install it permanently (e.g. via home-manager) and bind it to a niri key, see
-the deployment notes in [CLAUDE.md](./CLAUDE.md#deploying-with-home-manager).
