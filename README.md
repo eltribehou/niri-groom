@@ -35,12 +35,14 @@ onto another workspace/monitor. Neighbours slide to open a gap as you drag.
 
 ## Options
 
-- `--solo <monitor>` — start showing only that monitor (placed on it too); ignored
-  if no monitor matches. Handy for a dedicated map on a second screen.
-- `--app-id <id>` — set the app id (default `io.iwd.niri-groom`). A different id
-  runs as a separate instance, so you can keep a persistent map running alongside
-  the keybind-launched grooming overlay, e.g.
-  `niri-groom --solo eDP-1 --app-id io.iwd.niri-groom-map`.
+- `--solo <monitor>` — start showing only that monitor's content (full-width);
+  ignored if no monitor matches. It does not move the overlay — where it appears
+  is left to your niri config.
+- `--app-id <id>` — set the layer-shell namespace (default `niri-groom`), which is
+  what niri matches the surface by, and which keys single-instance. A different id
+  runs as a separate instance, so you can keep a persistent map alongside the
+  keybind-launched grooming overlay and place it from niri, e.g.
+  `niri-groom --solo eDP-1 --app-id niri-groom-map`.
 
 ## Themes
 

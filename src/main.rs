@@ -21,6 +21,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 const APP_ID: &str = "io.iwd.niri-groom";
+/// Default layer-shell namespace (niri matches the surface by this); `--app-id`
+/// overrides it.
+const APP_NAMESPACE: &str = "niri-groom";
 
 /// A workspace together with the windows it holds (sorted by column, then row).
 struct WsView {
@@ -411,11 +414,14 @@ fn refresh(state: &Rc<RefCell<State>>) {
 struct Opts {
     /// Start in solo mode on the output with this name (if it exists).
     solo_monitor: Option<String>,
+    /// The layer-shell namespace (what niri matches the surface by). `--app-id`
+    /// sets it, so niri config can target a given instance (e.g. place a map).
+    namespace: String,
 }
 
-fn parse_args() -> (String, Opts) {
+fn parse_args() -> Opts {
     let argv: Vec<String> = std::env::args().collect();
-    let mut app_id = APP_ID.to_string();
+    let mut namespace = APP_NAMESPACE.to_string();
     let mut solo_monitor = None;
     let mut i = 1;
     while i < argv.len() {
@@ -434,7 +440,7 @@ fn parse_args() -> (String, Opts) {
             match key {
                 "--app-id" => {
                     if let Some(v) = val {
-                        app_id = v;
+                        namespace = v;
                     }
                 }
                 "--solo" => solo_monitor = val,
@@ -443,15 +449,32 @@ fn parse_args() -> (String, Opts) {
         }
         i += 1;
     }
-    if !gtk::gio::Application::id_is_valid(&app_id) {
-        app_id = APP_ID.to_string();
+    Opts {
+        solo_monitor,
+        namespace,
     }
-    (app_id, Opts { solo_monitor })
+}
+
+/// A valid, unique GApplication id derived from the namespace (single-instance
+/// is keyed on it, so distinct namespaces must yield distinct ids).
+fn derive_app_id(namespace: &str) -> String {
+    let is_valid = |s: &str| gtk::gio::Application::id_is_valid(s);
+    if is_valid(namespace) {
+        return namespace.to_string();
+    }
+    let candidate = format!("io.iwd.{namespace}");
+    if is_valid(&candidate) {
+        candidate
+    } else {
+        APP_ID.to_string()
+    }
 }
 
 fn main() -> glib::ExitCode {
-    let (app_id, opts) = parse_args();
-    let app = Application::builder().application_id(&app_id).build();
+    let opts = parse_args();
+    let app = Application::builder()
+        .application_id(derive_app_id(&opts.namespace))
+        .build();
     let opts = Rc::new(opts);
     app.connect_activate(move |a| build_ui(a, &opts));
     // Don't let GApplication try to parse our own flags.
@@ -459,23 +482,6 @@ fn main() -> glib::ExitCode {
         .next()
         .unwrap_or_else(|| "niri-groom".into());
     app.run_with_args(&[argv0])
-}
-
-/// The gdk monitor whose connector matches `name`.
-fn gdk_monitor_by_name(name: &str) -> Option<gdk::Monitor> {
-    let display = gdk::Display::default()?;
-    let monitors = display.monitors();
-    for i in 0..monitors.n_items() {
-        if let Some(mon) = monitors
-            .item(i)
-            .and_then(|o| o.downcast::<gdk::Monitor>().ok())
-        {
-            if mon.connector().as_deref() == Some(name) {
-                return Some(mon);
-            }
-        }
-    }
-    None
 }
 
 fn build_ui(app: &Application, opts: &Opts) {
@@ -551,19 +557,10 @@ fn build_ui(app: &Application, opts: &Opts) {
     // Layer-shell: a fullscreen overlay that grabs the keyboard.
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
-    window.set_namespace(Some("niri-groom"));
+    window.set_namespace(Some(&opts.namespace));
     window.set_keyboard_mode(KeyboardMode::Exclusive);
     for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
         window.set_anchor(edge, true);
-    }
-    // With --solo, also place the overlay on that monitor (not just show its
-    // content) so it reads as a map dedicated to that screen.
-    if let Some(mon) = opts
-        .solo_monitor
-        .as_ref()
-        .and_then(|name| gdk_monitor_by_name(name))
-    {
-        window.set_monitor(Some(&mon));
     }
 
     let area = DrawingArea::new();

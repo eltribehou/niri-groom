@@ -104,20 +104,21 @@ workspaces don't offset them.
 
 ## Command-line options
 
-- `--solo <monitor>` — start in solo mode showing only that output, and place the
-  overlay on it (via `gtk4-layer-shell` `set_monitor`). If no output matches the
-  name, it's ignored (normal multi-screen view). Good for a dedicated map on one
-  screen.
-- `--app-id <id>` — set the `GApplication` application id (default
-  `io.iwd.niri-groom`). Since single-instance is keyed on the app id, a second
-  instance with a *different* id runs independently — e.g. a persistent map
-  alongside the `Mod+G` grooming instance. An invalid id falls back to the
-  default.
+- `--solo <monitor>` — start in solo mode showing only that output's content
+  (full-width). It does **not** move the overlay — the surface still maps on
+  whatever output niri places it on; *where* it appears is left to niri config
+  (matched via the namespace, below). Ignored if no output matches the name.
+- `--app-id <id>` — set the **layer-shell namespace** (default `niri-groom`).
+  niri identifies a layer surface by its namespace, so this is what niri config
+  matches to target a given instance (e.g. to place a dedicated map). A valid,
+  unique `GApplication` id is *derived* from it (`derive_app_id`) so single
+  instance still works and distinct namespaces are distinct instances — e.g. a
+  persistent map (`--app-id niri-groom-map`) coexists with the `Mod+G` grooming
+  instance (`niri-groom`).
 
 Args are parsed by `parse_args()` before the app is built, and the app is run
 with `run_with_args` passing only argv[0] so `GApplication` doesn't try to parse
-our flags. A typical autostart map: `niri-groom --solo eDP-1 --app-id
-io.iwd.niri-groom-map`.
+our flags. A typical autostart map: `niri-groom --solo eDP-1 --app-id niri-groom-map`.
 
 ## Theming and config
 
