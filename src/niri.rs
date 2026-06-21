@@ -210,6 +210,16 @@ pub fn move_column(window_id: u64, right: bool) -> Result<(), String> {
     }])
 }
 
+/// Move the *focused* workspace to the monitor on the left/right. Caller focuses
+/// the target workspace first. niri no-ops when there's no monitor that way.
+pub fn move_workspace_to_monitor(left: bool) -> Result<(), String> {
+    action(&[if left {
+        "move-workspace-to-monitor-left"
+    } else {
+        "move-workspace-to-monitor-right"
+    }])
+}
+
 /// Move a workspace up or down within its monitor's stack.
 ///
 /// `move-workspace-up`/`-down` only act on the *focused* workspace, and

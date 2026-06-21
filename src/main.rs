@@ -540,6 +540,16 @@ fn handle_key(
     }
 
     let ch = keyval.to_unicode();
+
+    // Ctrl+H / Ctrl+L: move the selected window's column within its workspace.
+    if mods.contains(gdk::ModifierType::CONTROL_MASK) {
+        match ch.map(|c| c.to_ascii_lowercase()) {
+            Some('h') => return move_selected_column(state, false),
+            Some('l') => return move_selected_column(state, true),
+            _ => {}
+        }
+    }
+
     match (ch, *keyval) {
         (Some('q'), _) | (_, gdk::Key::Escape) => {
             app.quit();
@@ -575,9 +585,9 @@ fn handle_key(
         // Window navigation (horizontal, within workspace).
         (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, 1),
         (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, -1),
-        // Move the selected window's column left/right (Shift+H / Shift+L).
-        (Some('L'), _) => move_selected_column(state, true),
-        (Some('H'), _) => move_selected_column(state, false),
+        // Move the selected workspace to the screen left/right (Shift+H / Shift+L).
+        (Some('L'), _) => move_selected_ws_to_monitor(state, false),
+        (Some('H'), _) => move_selected_ws_to_monitor(state, true),
         // Jump straight to the next/previous screen (output).
         (_, gdk::Key::Tab) => move_output(state, 1),
         (_, gdk::Key::ISO_Left_Tab) => move_output(state, -1),
@@ -662,6 +672,22 @@ fn move_selected_column(state: &Rc<RefCell<State>>, right: bool) -> bool {
     // Moving requires focusing a window in the column, so restore focus after.
     let focus = capture_focus();
     let _ = niri::move_column(win_id, right);
+    restore_focus(focus);
+    refresh(state);
+    true
+}
+
+/// Move the selected workspace to the monitor on the left/right. The selection
+/// follows the workspace by id across the refresh, so it lands on the new screen.
+fn move_selected_ws_to_monitor(state: &Rc<RefCell<State>>, left: bool) -> bool {
+    let target = match state.borrow().selected_ws_id() {
+        Some(id) => id,
+        None => return false,
+    };
+    let focus = capture_focus();
+    if niri::focus_workspace_by_id(target).is_ok() {
+        let _ = niri::move_workspace_to_monitor(left);
+    }
     restore_focus(focus);
     refresh(state);
     true
@@ -1027,7 +1053,7 @@ fn draw_window(
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
     set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
     cr.set_font_size(13.0);
-    let help = "j/k ws · J/K move ws · h/l win · H/L move col · Tab screen · Enter focus · r rename · w kill ws · x kill win · q quit";
+    let help = "j/k ws · J/K move ws · H/L ws to screen · h/l win · ^H/^L move col · Tab screen · Enter focus · r rename · w kill ws · x kill win · q quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
     text_at(cr, PAD, h - 10.0, &fitted);
 }
