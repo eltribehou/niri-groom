@@ -1,0 +1,6 @@
+# Pins the toolchain for rustup users so everyone builds with the same compiler.
+# (The Nix dev shell / `nix build` use the rustc pinned by the flake instead;
+# bare `cargo` outside rustup ignores this file.)
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

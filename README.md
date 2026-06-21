@@ -39,20 +39,46 @@ catppuccin-mocha):
 theme "catppuccin-mocha"
 ```
 
-## Run
+## Build from source
 
-Requires [Nix](https://nixos.org/) with flakes enabled. All build tooling
-(Rust + GTK4 + gtk4-layer-shell) is provided by the flake; nothing is installed
-globally.
+niri-groom is a standard Rust (Cargo) project. At runtime it needs the
+[niri](https://github.com/YaLTeR/niri) compositor; to build it you need a Rust
+toolchain plus the GTK4 and gtk4-layer-shell development libraries and
+`pkg-config`.
+
+Install the system dependencies:
 
 ```sh
-nix run            # build and launch
-# or
-nix build          # → ./result/bin/niri-groom
+# Fedora
+sudo dnf install gtk4-devel gtk4-layer-shell-devel pkgconf-pkg-config
+
+# Arch
+sudo pacman -S gtk4 gtk4-layer-shell pkgconf
+
+# Debian / Ubuntu
+sudo apt install libgtk-4-dev libgtk4-layer-shell-dev pkg-config
 ```
 
-For development, `nix develop` drops you into a shell with `cargo`, or use
-[direnv](https://direnv.net/) (`direnv allow`) to load it automatically.
+Then build and install with Cargo:
+
+```sh
+cargo build --release      # → ./target/release/niri-groom
+cargo install --path .     # → ~/.cargo/bin/niri-groom
+```
+
+### With Nix (reproducible, no system deps needed)
+
+If you use [Nix](https://nixos.org/) with flakes, the flake pins the entire
+toolchain and GTK stack — nothing is installed globally:
+
+```sh
+nix run                    # build and launch
+nix build                  # → ./result/bin/niri-groom
+nix develop                # dev shell with cargo, clippy, rustfmt, GTK…
+```
+
+With [direnv](https://direnv.net/), `direnv allow` loads the dev shell
+automatically on `cd`.
 
 To install it permanently (e.g. via home-manager) and bind it to a niri key, see
 the deployment notes in [CLAUDE.md](./CLAUDE.md#deploying-with-home-manager).

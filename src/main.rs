@@ -180,7 +180,10 @@ impl State {
     /// The theme to draw with: the picker's live highlight if open, else the
     /// saved one.
     fn theme(&self) -> &Theme {
-        &self.themes[self.picker.unwrap_or(self.theme_idx).min(self.themes.len() - 1)]
+        &self.themes[self
+            .picker
+            .unwrap_or(self.theme_idx)
+            .min(self.themes.len() - 1)]
     }
 }
 
@@ -213,7 +216,11 @@ impl State {
 
     /// Output index of the current selection.
     fn sel_output(&self) -> usize {
-        self.model.nav.get(self.sel_nav).map(|&(o, _)| o).unwrap_or(0)
+        self.model
+            .nav
+            .get(self.sel_nav)
+            .map(|&(o, _)| o)
+            .unwrap_or(0)
     }
 }
 
@@ -270,7 +277,13 @@ fn build_model() -> Result<Model, String> {
             fallback_x += 1600.0;
             g
         });
-        outputs.push(OutputView { name, workspaces, x, y, w });
+        outputs.push(OutputView {
+            name,
+            workspaces,
+            x,
+            y,
+            w,
+        });
     }
 
     // Order outputs left-to-right, then top-to-bottom, by logical position.
@@ -311,9 +324,12 @@ fn refresh(state: &Rc<RefCell<State>>) {
 
     // Re-find the previously selected workspace.
     if let Some(ws_id) = prev_ws_id {
-        if let Some(idx) = s.model.nav.iter().position(|&(o, w)| {
-            s.model.outputs[o].workspaces[w].ws.id == ws_id
-        }) {
+        if let Some(idx) = s
+            .model
+            .nav
+            .iter()
+            .position(|&(o, w)| s.model.outputs[o].workspaces[w].ws.id == ws_id)
+        {
             s.sel_nav = idx;
         }
     }
@@ -920,7 +936,10 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     // height (the configured y-offset between screens isn't reproduced — it'd
     // just waste space in a survey view).
     let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
-    let max_x = outputs.iter().map(|o| o.x + o.w).fold(f64::NEG_INFINITY, f64::max);
+    let max_x = outputs
+        .iter()
+        .map(|o| o.x + o.w)
+        .fold(f64::NEG_INFINITY, f64::max);
     let span_w = (max_x - min_x).max(1.0);
     let scale_x = content_w / span_w;
 
@@ -943,7 +962,12 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         );
         set(cr, t.text, 0.85);
         cr.set_font_size(17.0);
-        text_at(cr, ox + 12.0, oy + 21.0, &fit_text(cr, &output.name, ow - 24.0));
+        text_at(
+            cr,
+            ox + 12.0,
+            oy + 21.0,
+            &fit_text(cr, &output.name, ow - 24.0),
+        );
 
         let wx = ox + 8.0;
         let ww = ow - 16.0;
@@ -1018,7 +1042,10 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit, t: &Theme)
 
     // Caret: a thin vertical bar at the cursor's x-advance.
     let prefix: String = edit.buf[..edit.cursor].iter().collect();
-    let caret_x = text_x + cr.text_extents(&prefix).map(|e| e.x_advance()).unwrap_or(0.0);
+    let caret_x = text_x
+        + cr.text_extents(&prefix)
+            .map(|e| e.x_advance())
+            .unwrap_or(0.0);
     set(cr, t.accent, 1.0);
     cr.set_line_width(1.5);
     cr.move_to(caret_x, text_y - 17.0);
@@ -1071,7 +1098,12 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     );
     set(cr, t.subtext, 1.0);
     cr.set_font_size(11.0);
-    text_at(cr, bx + 16.0, by + 42.0, "↑/↓ select · Enter save · Esc cancel");
+    text_at(
+        cr,
+        bx + 16.0,
+        by + 42.0,
+        "↑/↓ select · Enter save · Esc cancel",
+    );
 
     // Rows.
     for (i, th) in state.themes.iter().enumerate() {
@@ -1114,7 +1146,12 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
             set(cr, t.text, 0.95);
         }
         cr.set_font_size(14.0);
-        text_at(cr, bx + 16.0 + 3.0 * (ss + 4.0) + 8.0, ry + row_h / 2.0 + 5.0, th.name);
+        text_at(
+            cr,
+            bx + 16.0 + 3.0 * (ss + 4.0) + 8.0,
+            ry + row_h / 2.0 + 5.0,
+            th.name,
+        );
     }
 }
 
@@ -1217,11 +1254,21 @@ fn draw_workspace(
         for (r, (lin_idx, win)) in column.iter().enumerate() {
             let ry = inner_y + r as f64 * rh;
             let win_selected = selected && *lin_idx == sel_win;
-            draw_window(cr, cx + 3.0, ry + 3.0, cw - 6.0, rh - 6.0, win, win_selected, t);
+            draw_window(
+                cr,
+                cx + 3.0,
+                ry + 3.0,
+                cw - 6.0,
+                rh - 6.0,
+                win,
+                win_selected,
+                t,
+            );
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_window(
     cr: &gtk::cairo::Context,
     x: f64,
@@ -1308,7 +1355,12 @@ fn draw_window(
         );
         set(cr, t.text, 1.0);
         cr.set_font_size(14.0);
-        text_at(cr, tx, y + h / 2.0 + 5.0, &fit_text(cr, &win.label(), text_w));
+        text_at(
+            cr,
+            tx,
+            y + h / 2.0 + 5.0,
+            &fit_text(cr, &win.label(), text_w),
+        );
         cr.select_font_face(
             "sans-serif",
             gtk::cairo::FontSlant::Normal,

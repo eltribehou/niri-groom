@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Provide the build toolchain and GTK dependencies reproducibly via the
+      # flake, then drive the standard cargo commands inside the dev shell.
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Format
+        run: nix develop --command cargo fmt --check
+
+      - name: Clippy
+        run: nix develop --command cargo clippy --release -- -D warnings
+
+      - name: Build
+        run: nix develop --command cargo build --release
+
+      - name: Nix build (packaged binary)
+        run: nix build

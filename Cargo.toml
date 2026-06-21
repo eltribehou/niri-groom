@@ -2,7 +2,13 @@
 name = "niri-groom"
 version = "0.1.0"
 edition = "2021"
-description = "A niri workspace/window survey & quick-kill overlay"
+description = "A fullscreen overlay for the niri compositor to survey and quick-kill workspaces and windows"
+authors = ["Samuel Tribehou"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/eltribehou/niri-groom"
+keywords = ["niri", "wayland", "layer-shell", "gtk4", "overlay"]
+categories = ["gui", "command-line-utilities"]
 
 [dependencies]
 gtk4 = "0.11"
