@@ -41,9 +41,10 @@ onto another workspace/monitor. Neighbours slide to open a gap as you drag.
   place a layer-shell surface from config, so the app requests it.) Independent of
   `--solo`.
 - `--app-id <id>` — set the layer-shell namespace (default `niri-groom`); it keys
-  single-instance, so a different id runs as a separate instance. Lets you keep a
-  persistent map alongside the keybind-launched grooming overlay, e.g.
-  `niri-groom --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
+  single-instance, so a different id runs as a separate instance.
+- `--toggle` — a second launch of the same instance closes the overlay, so one
+  keybind opens and closes it, e.g.
+  `niri-groom --toggle --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
 
 ## Themes
 

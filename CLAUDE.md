@@ -119,11 +119,17 @@ workspaces don't offset them.
   `GApplication` id is *derived* from it (`derive_app_id`) so single-instance
   still works and distinct namespaces are distinct instances — e.g. a persistent
   map (`--app-id niri-groom-map`) coexists with the `Mod+G` grooming instance.
+- `--toggle` — make the binding a toggle: a second launch of the same instance
+  closes the overlay instead of re-presenting it. (GApplication forwards the
+  second `activate` to the running instance; with `--toggle` the guard in
+  `build_ui` calls `app.quit()`. Note the *first* launch must carry `--toggle`,
+  since it's the primary's opts that decide — using the same bind both presses
+  guarantees that.)
 
 Args are parsed by `parse_args()` before the app is built, and the app is run
 with `run_with_args` passing only argv[0] so `GApplication` doesn't try to parse
-our flags. A typical autostart map:
-`niri-groom --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
+our flags. A typical toggle bind:
+`niri-groom --toggle --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
 
 ## Theming and config
 

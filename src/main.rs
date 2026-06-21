@@ -420,6 +420,9 @@ struct Opts {
     /// The layer-shell namespace (what niri matches the surface by). `--app-id`
     /// sets it, so niri config can target a given instance for its rules.
     namespace: String,
+    /// `--toggle`: a second launch of the same instance closes it instead of
+    /// re-presenting, so one keybind opens and closes the overlay.
+    toggle: bool,
 }
 
 fn parse_args() -> Opts {
@@ -427,6 +430,7 @@ fn parse_args() -> Opts {
     let mut namespace = APP_NAMESPACE.to_string();
     let mut solo_monitor = None;
     let mut output = None;
+    let mut toggle = false;
     let mut i = 1;
     while i < argv.len() {
         let arg = argv[i].clone();
@@ -434,7 +438,9 @@ fn parse_args() -> Opts {
             Some((k, v)) => (k, Some(v.to_string())),
             None => (arg.as_str(), None),
         };
-        if matches!(key, "--app-id" | "--solo" | "--open-on-monitor") {
+        if key == "--toggle" {
+            toggle = true;
+        } else if matches!(key, "--app-id" | "--solo" | "--open-on-monitor") {
             let val = if inline.is_some() {
                 inline
             } else {
@@ -458,6 +464,7 @@ fn parse_args() -> Opts {
         solo_monitor,
         output,
         namespace,
+        toggle,
     }
 }
 
@@ -509,11 +516,15 @@ fn gdk_monitor_by_name(name: &str) -> Option<gdk::Monitor> {
 
 fn build_ui(app: &Application, opts: &Opts) {
     // Single-instance: GApplication forwards a second launch's `activate` to the
-    // already-running instance. Pressing the keybind again would otherwise stack
-    // a second layer-shell overlay, and two exclusive keyboard grabs deadlock
-    // input. So if a window already exists, just raise it and bail.
+    // already-running instance (so a second keybind press can't stack a second
+    // exclusive-keyboard overlay and deadlock input). With `--toggle` that second
+    // press closes the overlay; otherwise it just re-presents the existing one.
     if let Some(win) = app.windows().into_iter().next() {
-        win.present();
+        if opts.toggle {
+            app.quit();
+        } else {
+            win.present();
+        }
         return;
     }
 
