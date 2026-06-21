@@ -550,7 +550,9 @@ fn build_ui(app: &Application, opts: &Opts) {
         theme_idx,
         picker: None,
         show_help: false,
-        active: true,
+        // Corrected from the real focus state just after present() — the overlay
+        // may open on a non-focused output, where it never gains focus.
+        active: false,
         solo,
         drag: None,
         anim_ws: HashMap::new(),
@@ -737,6 +739,19 @@ fn build_ui(app: &Application, opts: &Opts) {
 
     window.set_child(Some(&area));
     window.present();
+
+    // Capture the real focus state once the surface has settled: if the overlay
+    // opened on a non-focused output it never fires an is-active change, so the
+    // selection would otherwise stay shown. (Ongoing changes use the notify above.)
+    {
+        let state = state.clone();
+        let area = area.clone();
+        let window = window.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+            state.borrow_mut().active = window.is_active();
+            area.queue_draw();
+        });
+    }
 
     // Refresh on niri's event stream: a background thread reads one JSON line
     // per change and pings a bounded(1) channel; the channel coalesces bursts
