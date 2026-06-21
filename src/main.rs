@@ -740,14 +740,33 @@ fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
 // Drawing
 // ---------------------------------------------------------------------------
 
-const PAD: f64 = 18.0;
-const FOOTER_H: f64 = 30.0;
-const OUTPUT_HEADER_H: f64 = 28.0;
-const WS_GAP: f64 = 10.0;
-const WS_HEADER_H: f64 = 26.0;
+const PAD: f64 = 20.0;
+const FOOTER_H: f64 = 32.0;
+const OUTPUT_HEADER_H: f64 = 30.0;
+const WS_GAP: f64 = 12.0;
+const WS_HEADER_H: f64 = 28.0;
+
+/// Single accent colour used for selection and highlights.
+const ACCENT: (f64, f64, f64) = (0.40, 0.64, 1.0);
 
 fn set_rgba(cr: &gtk::cairo::Context, r: f64, g: f64, b: f64, a: f64) {
     cr.set_source_rgba(r, g, b, a);
+}
+
+fn set_accent(cr: &gtk::cairo::Context, a: f64) {
+    cr.set_source_rgba(ACCENT.0, ACCENT.1, ACCENT.2, a);
+}
+
+/// Trace a rounded-rectangle path (caller fills/strokes it).
+fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
+    use std::f64::consts::PI;
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+    cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+    cr.close_path();
 }
 
 /// Truncate `text` with an ellipsis so it fits within `max_w`.
@@ -783,7 +802,7 @@ fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, s: &str) {
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     // Opaque backdrop (a layer surface can't be forced opaque from niri config,
     // so the app draws it fully opaque for readability).
-    set_rgba(cr, 0.06, 0.07, 0.10, 1.0);
+    set_rgba(cr, 0.055, 0.062, 0.085, 1.0);
     cr.rectangle(0.0, 0.0, w, h);
     let _ = cr.fill();
 
@@ -833,23 +852,25 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         let ow = output.w * scale_x;
         let oh = content_h;
 
-        // Faint outline of the screen's extent.
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.05);
-        cr.rectangle(ox, oy, ow, oh);
+        // Subtle grouping panel for the screen's extent.
+        set_rgba(cr, 1.0, 1.0, 1.0, 0.022);
+        rounded_rect(cr, ox, oy, ow, oh, 14.0);
         let _ = cr.fill();
 
-        // Output header inside the top of its rectangle.
+        // Output header.
         cr.select_font_face(
             "sans-serif",
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Bold,
         );
-        set_rgba(cr, 0.72, 0.78, 0.90, 1.0);
+        set_rgba(cr, 0.74, 0.80, 0.92, 1.0);
         cr.set_font_size(17.0);
-        text_at(cr, ox + 2.0, oy + 20.0, &fit_text(cr, &output.name, ow - 4.0));
+        text_at(cr, ox + 12.0, oy + 21.0, &fit_text(cr, &output.name, ow - 24.0));
 
+        let wx = ox + 8.0;
+        let ww = ow - 16.0;
         let wy0 = oy + OUTPUT_HEADER_H;
-        let avail_h = oh - OUTPUT_HEADER_H;
+        let avail_h = oh - OUTPUT_HEADER_H - 8.0;
         let m = output.workspaces.len();
         if m == 0 {
             continue;
@@ -859,7 +880,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         for (j, wsv) in output.workspaces.iter().enumerate() {
             let wy = wy0 + j as f64 * (ws_h + WS_GAP);
             let ws_selected = sel == Some((i, j));
-            draw_workspace(cr, ox, wy, ow, ws_h, wsv, ws_selected, state.sel_win);
+            draw_workspace(cr, wx, wy, ww, ws_h, wsv, ws_selected, state.sel_win);
         }
     }
 
@@ -881,15 +902,20 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
     let bx = (w - bw) / 2.0;
     let by = (h - bh) / 2.0;
 
-    set_rgba(cr, 0.12, 0.14, 0.20, 0.98);
-    cr.rectangle(bx, by, bw, bh);
+    set_rgba(cr, 0.12, 0.14, 0.20, 0.99);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.fill();
-    set_rgba(cr, 0.30, 0.66, 1.0, 1.0);
+    set_accent(cr, 1.0);
     cr.set_line_width(2.0);
-    cr.rectangle(bx, by, bw, bh);
+    rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.stroke();
 
-    set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Normal,
+    );
+    set_rgba(cr, 0.62, 0.68, 0.80, 1.0);
     cr.set_font_size(12.0);
     text_at(
         cr,
@@ -913,7 +939,7 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit) {
     // Caret: a thin vertical bar at the cursor's x-advance.
     let prefix: String = edit.buf[..edit.cursor].iter().collect();
     let caret_x = text_x + cr.text_extents(&prefix).map(|e| e.x_advance()).unwrap_or(0.0);
-    set_rgba(cr, 0.40, 0.80, 1.0, 1.0);
+    set_accent(cr, 1.0);
     cr.set_line_width(1.5);
     cr.move_to(caret_x, text_y - 17.0);
     cr.line_to(caret_x, text_y + 4.0);
@@ -933,23 +959,29 @@ fn draw_workspace(
     selected: bool,
     sel_win: usize,
 ) {
-    // Workspace background.
-    set_rgba(cr, 0.13, 0.14, 0.18, 0.85);
-    cr.rectangle(x, y, w, h);
+    const R: f64 = 10.0;
+
+    // Workspace card background.
+    if selected {
+        set_rgba(cr, 0.15, 0.18, 0.25, 1.0);
+    } else {
+        set_rgba(cr, 0.115, 0.125, 0.16, 1.0);
+    }
+    rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
     // Border: accent if selected, faint otherwise.
     if selected {
-        set_rgba(cr, 0.30, 0.66, 1.0, 1.0);
-        cr.set_line_width(2.5);
+        set_accent(cr, 1.0);
+        cr.set_line_width(2.0);
     } else if wsv.ws.is_focused {
-        set_rgba(cr, 0.45, 0.55, 0.65, 0.9);
-        cr.set_line_width(1.5);
+        set_rgba(cr, 0.45, 0.55, 0.68, 0.7);
+        cr.set_line_width(1.2);
     } else {
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.08);
+        set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
         cr.set_line_width(1.0);
     }
-    cr.rectangle(x, y, w, h);
+    rounded_rect(cr, x, y, w, h, R);
     let _ = cr.stroke();
 
     // Workspace header label.
@@ -962,18 +994,25 @@ fn draw_workspace(
     if wsv.ws.is_urgent {
         set_rgba(cr, 1.0, 0.6, 0.4, 1.0);
     } else if selected {
-        set_rgba(cr, 0.55, 0.80, 1.0, 1.0);
+        set_accent(cr, 1.0);
     } else {
-        set_rgba(cr, 0.85, 0.88, 0.94, 1.0);
+        set_rgba(cr, 0.86, 0.89, 0.95, 1.0);
     }
-    let header = format!("{}  ({} win)", wsv.ws.label(), wsv.windows.len());
-    text_at(cr, x + 7.0, y + 18.0, &fit_text(cr, &header, w - 14.0));
+    let header = format!("{}   ({} win)", wsv.ws.label(), wsv.windows.len());
+    text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, w - 22.0));
+
+    // Thin separator under the header.
+    set_rgba(cr, 1.0, 1.0, 1.0, 0.06);
+    cr.set_line_width(1.0);
+    cr.move_to(x + 10.0, y + WS_HEADER_H - 5.0);
+    cr.line_to(x + w - 10.0, y + WS_HEADER_H - 5.0);
+    let _ = cr.stroke();
 
     // Window area.
-    let inner_x = x + 6.0;
+    let inner_x = x + 9.0;
     let inner_y = y + WS_HEADER_H;
-    let inner_w = w - 12.0;
-    let inner_h = h - WS_HEADER_H - 6.0;
+    let inner_w = w - 18.0;
+    let inner_h = h - WS_HEADER_H - 9.0;
 
     if wsv.windows.is_empty() {
         cr.select_font_face(
@@ -981,9 +1020,9 @@ fn draw_workspace(
             gtk::cairo::FontSlant::Normal,
             gtk::cairo::FontWeight::Normal,
         );
-        set_rgba(cr, 0.5, 0.5, 0.55, 0.8);
+        set_rgba(cr, 0.5, 0.5, 0.56, 0.8);
         cr.set_font_size(12.0);
-        text_at(cr, inner_x + 4.0, inner_y + 18.0, "(empty)");
+        text_at(cr, inner_x + 2.0, inner_y + 18.0, "(empty)");
         return;
     }
 
@@ -1007,7 +1046,7 @@ fn draw_workspace(
         for (r, (lin_idx, win)) in column.iter().enumerate() {
             let ry = inner_y + r as f64 * rh;
             let win_selected = selected && *lin_idx == sel_win;
-            draw_window(cr, cx + 2.0, ry + 2.0, cw - 4.0, rh - 4.0, win, win_selected);
+            draw_window(cr, cx + 3.0, ry + 3.0, cw - 6.0, rh - 6.0, win, win_selected);
         }
     }
 }
@@ -1025,41 +1064,44 @@ fn draw_window(
         return;
     }
 
+    const R: f64 = 7.0;
+
+    // Card fill. Selected windows get a blue tint (not a solid block) so the
+    // labels stay readable; the accent border carries the "selected" signal.
     if selected {
-        set_rgba(cr, 0.30, 0.66, 1.0, 0.92);
+        set_rgba(cr, 0.19, 0.32, 0.52, 1.0);
     } else if win.is_focused {
-        set_rgba(cr, 0.26, 0.30, 0.40, 0.95);
+        set_rgba(cr, 0.21, 0.235, 0.30, 1.0);
     } else {
-        set_rgba(cr, 0.20, 0.22, 0.27, 0.95);
+        set_rgba(cr, 0.165, 0.18, 0.225, 1.0);
     }
-    cr.rectangle(x, y, w, h);
+    rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
     // Border.
     if win.is_urgent {
         set_rgba(cr, 1.0, 0.45, 0.35, 1.0);
         cr.set_line_width(1.8);
+    } else if selected {
+        set_accent(cr, 1.0);
+        cr.set_line_width(2.0);
     } else {
-        set_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+        set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
         cr.set_line_width(1.0);
     }
-    cr.rectangle(x, y, w, h);
+    rounded_rect(cr, x, y, w, h, R);
     let _ = cr.stroke();
 
     // Labels: app id (secondary, above) then title (primary). The title is the
     // important one, so in a short box I drop the app id and show only the title.
-    let text_w = w - 14.0;
+    let text_w = w - 16.0;
     if text_w <= 0.0 {
         return;
     }
-    let tx = x + 7.0;
+    let tx = x + 8.0;
 
     let title_color = |cr: &gtk::cairo::Context| {
-        if selected {
-            set_rgba(cr, 0.02, 0.05, 0.10, 1.0);
-        } else {
-            set_rgba(cr, 0.96, 0.97, 0.99, 1.0);
-        }
+        set_rgba(cr, 0.97, 0.98, 1.0, 1.0);
     };
 
     if h >= 46.0 {
@@ -1070,9 +1112,9 @@ fn draw_window(
             gtk::cairo::FontWeight::Normal,
         );
         if selected {
-            set_rgba(cr, 0.06, 0.11, 0.20, 1.0);
+            set_rgba(cr, 0.78, 0.86, 0.98, 1.0);
         } else {
-            set_rgba(cr, 0.82, 0.87, 0.95, 1.0);
+            set_rgba(cr, 0.78, 0.83, 0.92, 1.0);
         }
         cr.set_font_size(13.0);
         if let Some(app_id) = &win.app_id {
@@ -1112,9 +1154,21 @@ fn draw_window(
 }
 
 fn draw_footer(cr: &gtk::cairo::Context, w: f64, h: f64) {
-    set_rgba(cr, 0.60, 0.66, 0.78, 1.0);
+    // Separator line above the footer.
+    set_rgba(cr, 1.0, 1.0, 1.0, 0.07);
+    cr.set_line_width(1.0);
+    cr.move_to(PAD, h - FOOTER_H + 4.0);
+    cr.line_to(w - PAD, h - FOOTER_H + 4.0);
+    let _ = cr.stroke();
+
+    cr.select_font_face(
+        "sans-serif",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Normal,
+    );
+    set_rgba(cr, 0.56, 0.61, 0.72, 1.0);
     cr.set_font_size(13.0);
     let help = "j/k ws · J/K move ws · H/L ws to screen · h/l win · ^H/^L move col · Tab screen · Enter focus · r rename · w kill ws · x kill win · q quit";
     let fitted = fit_text(cr, help, w - 2.0 * PAD);
-    text_at(cr, PAD, h - 10.0, &fitted);
+    text_at(cr, PAD, h - 11.0, &fitted);
 }
