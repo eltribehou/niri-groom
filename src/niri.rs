@@ -240,6 +240,34 @@ pub fn move_workspace_to_monitor(left: bool) -> Result<(), String> {
     }])
 }
 
+// --- drag-and-drop drop primitives (all act on the focused workspace/column) ---
+
+/// Move the focused workspace to a 1-based index on its monitor.
+pub fn move_workspace_to_index(idx: i64) -> Result<(), String> {
+    action(&["move-workspace-to-index", &idx.to_string()])
+}
+
+/// Move the focused workspace to a monitor by output name.
+pub fn move_workspace_to_monitor_named(output: &str) -> Result<(), String> {
+    action(&["move-workspace-to-monitor", output])
+}
+
+/// Move the focused column to a 1-based index on its workspace.
+pub fn move_column_to_index(idx: i64) -> Result<(), String> {
+    action(&["move-column-to-index", &idx.to_string()])
+}
+
+/// Move the focused column to a workspace by reference (index or name), without
+/// moving keyboard focus along with it.
+pub fn move_column_to_workspace(reference: &str) -> Result<(), String> {
+    action(&["move-column-to-workspace", "--focus", "false", reference])
+}
+
+/// Move the focused column to a monitor by output name.
+pub fn move_column_to_monitor(output: &str) -> Result<(), String> {
+    action(&["move-column-to-monitor", output])
+}
+
 /// Move a workspace up or down within its monitor's stack.
 ///
 /// `move-workspace-up`/`-down` only act on the *focused* workspace, and

@@ -73,6 +73,28 @@ prefix) and then the real one, which forces the change through. I avoid the simp
 unset-then-set because unsetting an empty workspace's name can let niri reclaim it
 mid-rename.
 
+## Mouse drag-and-drop
+
+Everything the keyboard moves can also be done by dragging (a `GestureDrag` on
+the `DrawingArea`):
+
+- **Grab a workspace header** → move the whole workspace: reorder it within its
+  monitor, or drag it onto another monitor.
+- **Grab a column** (a window/column body) → move the column: reorder it within
+  its workspace, or drop it on another workspace / monitor.
+
+`compute_layout()` produces the positioned boxes shared by rendering and pointer
+hit-testing. While a drag is in progress the model refresh is **frozen** (so the
+grabbed geometry stays put), neighbours **reflow** to open a gap at the drop slot
+(eased per-item positions in `anim_ws` / `anim_col`, advanced by a frame-clock
+tick callback), and the grabbed item floats under the cursor. On drop the move is
+applied with niri actions — `move-workspace-to-index` /
+`move-workspace-to-monitor` for workspaces; `move-column-to-index` /
+`move-column-to-workspace` (`--focus false`) / `move-column-to-monitor` for
+columns — then the freeze lifts and the event stream syncs the result. Drop
+indices are mapped through neighbours' real niri indices so hidden trailing empty
+workspaces don't offset them.
+
 ## Theming and config
 
 Colors come from a `Theme` (`src/theme.rs`): a handful of base colors (bg /

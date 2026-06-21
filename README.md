@@ -28,6 +28,10 @@ whole workspace or a single window from the keyboard, instantly.
 There is **no confirmation** — `w` and `x` kill immediately. Killing a workspace
 also drops its name so niri reclaims the empty workspace.
 
+You can also **drag with the mouse**: grab a workspace's header to reorder it or
+move it to another monitor, or grab a column to move it within its workspace or
+onto another workspace/monitor. Neighbours slide to open a gap as you drag.
+
 ## Themes
 
 Nine built-in themes — catppuccin (mocha/macchiato/latte), gruvbox

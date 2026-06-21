@@ -15,7 +15,7 @@ use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, DrawingArea, EventControllerKey};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::BufRead;
 use std::rc::Rc;
 use std::time::Duration;
@@ -161,6 +161,38 @@ impl Edit {
     }
 }
 
+/// What the pointer is dragging.
+#[derive(Clone)]
+enum DragKind {
+    /// A whole workspace (grabbed by its header), identified by id.
+    Workspace { id: u64 },
+    /// A column within a workspace: the source workspace + the niri column index,
+    /// plus a representative window id to focus the column on drop.
+    Column { ws_id: u64, col: i64, win_id: u64 },
+}
+
+/// Where a drag would land if dropped now.
+#[derive(Clone, Copy, PartialEq)]
+enum DropTarget {
+    /// Insert the workspace into output `o` at slot `idx` (0-based among the
+    /// other workspaces there).
+    Workspace { o: usize, idx: usize },
+    /// Insert the column into workspace (o, wi) at column slot `idx`.
+    Column { o: usize, wi: usize, idx: usize },
+}
+
+struct Drag {
+    kind: DragKind,
+    /// Pointer offset within the grabbed item's rect, so it doesn't jump.
+    grab: (f64, f64),
+    /// Press point and current pointer, in widget coordinates.
+    start: (f64, f64),
+    cursor: (f64, f64),
+    /// True once the pointer has moved past the start threshold.
+    active: bool,
+    target: Option<DropTarget>,
+}
+
 struct State {
     model: Model,
     /// Index into `model.nav` — the currently selected workspace.
@@ -180,6 +212,12 @@ struct State {
     /// it's left running as a map on another monitor), the groom selection is
     /// hidden so only niri's own focus highlight remains.
     active: bool,
+    /// In-progress pointer drag (freezes refresh so the layout stays put).
+    drag: Option<Drag>,
+    /// Eased on-screen top-left per workspace id and per column, so neighbours
+    /// slide to open a gap during a drag instead of jumping.
+    anim_ws: HashMap<u64, (f64, f64)>,
+    anim_col: HashMap<(u64, i64), (f64, f64)>,
     error: Option<String>,
 }
 
@@ -313,6 +351,12 @@ fn build_model() -> Result<Model, String> {
 
 /// Refresh the model in place, preserving the selection by id where possible.
 fn refresh(state: &Rc<RefCell<State>>) {
+    // Don't rebuild the model mid-drag — the grabbed indices/geometry must stay
+    // stable until the drop is applied.
+    if state.borrow().drag.is_some() {
+        return;
+    }
+
     let (prev_ws_id, prev_win_id) = {
         let s = state.borrow();
         (s.selected_ws_id(), s.selected_win_id())
@@ -395,6 +439,9 @@ fn build_ui(app: &Application) {
         picker: None,
         show_help: false,
         active: true,
+        drag: None,
+        anim_ws: HashMap::new(),
+        anim_col: HashMap::new(),
         error: None,
     }));
     // Open the overlay on the currently focused workspace.
@@ -455,6 +502,97 @@ fn build_ui(app: &Application) {
         });
     }
     window.add_controller(key);
+
+    // Mouse drag-and-drop: grab a workspace header to reorder/move it, or a
+    // column body to move it. Applied via niri actions on drop.
+    let drag_gesture = gtk::GestureDrag::new();
+    {
+        let state = state.clone();
+        let area = area.clone();
+        drag_gesture.connect_drag_begin(move |_g, x, y| {
+            let w = area.width() as f64;
+            let h = area.height() as f64;
+            let hit = {
+                let s = state.borrow();
+                if s.editing.is_some() || s.picker.is_some() {
+                    None
+                } else {
+                    let layout = compute_layout(&s.model, w, h);
+                    hit_workspace_header(&layout, &s.model, x, y)
+                        .or_else(|| hit_column(&layout, &s.model, x, y))
+                }
+            };
+            if let Some((kind, rect)) = hit {
+                state.borrow_mut().drag = Some(Drag {
+                    kind,
+                    grab: (x - rect.0, y - rect.1),
+                    start: (x, y),
+                    cursor: (x, y),
+                    active: false,
+                    target: None,
+                });
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        let area = area.clone();
+        drag_gesture.connect_drag_update(move |_g, ox, oy| {
+            let w = area.width() as f64;
+            let h = area.height() as f64;
+            let mut start_tick = false;
+            {
+                let mut s = state.borrow_mut();
+                let Some(d) = s.drag.as_mut() else {
+                    return;
+                };
+                d.cursor = (d.start.0 + ox, d.start.1 + oy);
+                if !d.active && (ox * ox + oy * oy).sqrt() > DRAG_THRESHOLD {
+                    d.active = true;
+                    start_tick = true;
+                }
+            }
+            if start_tick {
+                let state = state.clone();
+                let area2 = area.clone();
+                area.add_tick_callback(move |a, _| {
+                    let w = a.width() as f64;
+                    let h = a.height() as f64;
+                    if animate_step(&state, w, h) {
+                        area2.queue_draw();
+                        glib::ControlFlow::Continue
+                    } else {
+                        glib::ControlFlow::Break
+                    }
+                });
+            }
+            recompute_target(&state, w, h);
+            area.queue_draw();
+        });
+    }
+    {
+        let state = state.clone();
+        let area = area.clone();
+        drag_gesture.connect_drag_end(move |_g, _ox, _oy| {
+            let outcome = {
+                let s = state.borrow();
+                s.drag
+                    .as_ref()
+                    .map(|d| (d.active, d.kind.clone(), d.target))
+            };
+            match outcome {
+                Some((true, kind, Some(target))) => apply_drop(&state, &kind, target),
+                _ => {
+                    let mut s = state.borrow_mut();
+                    s.drag = None;
+                    s.anim_ws.clear();
+                    s.anim_col.clear();
+                }
+            }
+            area.queue_draw();
+        });
+    }
+    area.add_controller(drag_gesture);
 
     // Track keyboard focus so the groom selection can hide when the overlay is
     // left running unfocused (e.g. as a map on a second monitor).
@@ -1087,6 +1225,354 @@ fn compute_layout(model: &Model, w: f64, h: f64) -> Layout {
     layout
 }
 
+const DRAG_THRESHOLD: f64 = 6.0;
+
+/// Output index whose column the cursor x is in (nearest if between/outside).
+fn output_under_x(layout: &Layout, x: f64) -> Option<usize> {
+    if let Some(ol) = layout.outputs.iter().find(|o| x >= o.x && x <= o.x + o.w) {
+        return Some(ol.o);
+    }
+    layout
+        .outputs
+        .iter()
+        .min_by(|a, b| {
+            let da = (x - (a.x + a.w / 2.0)).abs();
+            let db = (x - (b.x + b.w / 2.0)).abs();
+            da.total_cmp(&db)
+        })
+        .map(|o| o.o)
+}
+
+/// If (x,y) is on a workspace header, return the workspace drag and its rect.
+fn hit_workspace_header(
+    layout: &Layout,
+    model: &Model,
+    x: f64,
+    y: f64,
+) -> Option<(DragKind, (f64, f64, f64, f64))> {
+    for wl in &layout.workspaces {
+        if x >= wl.x && x <= wl.x + wl.w && y >= wl.y && y <= wl.y + WS_HEADER_H {
+            let id = model.outputs[wl.o].workspaces[wl.wi].ws.id;
+            return Some((DragKind::Workspace { id }, (wl.x, wl.y, wl.w, wl.h)));
+        }
+    }
+    None
+}
+
+/// Workspace drop slot for the cursor: which output and insertion index among
+/// that output's other workspaces.
+fn workspace_drop_target(
+    layout: &Layout,
+    model: &Model,
+    dragged: u64,
+    cursor: (f64, f64),
+) -> Option<DropTarget> {
+    let o = output_under_x(layout, cursor.0)?;
+    let others: Vec<&WsLayout> = layout
+        .workspaces
+        .iter()
+        .filter(|wl| wl.o == o && model.outputs[wl.o].workspaces[wl.wi].ws.id != dragged)
+        .collect();
+    let mut idx = others.len();
+    for (i, wl) in others.iter().enumerate() {
+        if cursor.1 < wl.y + wl.h / 2.0 {
+            idx = i;
+            break;
+        }
+    }
+    Some(DropTarget::Workspace { o, idx })
+}
+
+/// Target on-screen top-left for each non-dragged workspace, with a gap opened
+/// at the drop slot — the basis for the slide animation.
+fn workspace_reflow(layout: &Layout, model: &Model, drag: &Drag) -> HashMap<u64, (f64, f64)> {
+    let mut targets = HashMap::new();
+    let DragKind::Workspace { id: dragged } = drag.kind else {
+        return targets;
+    };
+    let gap = match drag.target {
+        Some(DropTarget::Workspace { o, idx }) => Some((o, idx)),
+        _ => None,
+    };
+    let ws_id = |wl: &WsLayout| model.outputs[wl.o].workspaces[wl.wi].ws.id;
+
+    for ol in &layout.outputs {
+        let o = ol.o;
+        let all: Vec<&WsLayout> = layout.workspaces.iter().filter(|wl| wl.o == o).collect();
+        if all.is_empty() {
+            continue;
+        }
+        let base = all.iter().map(|wl| wl.y).fold(f64::INFINITY, f64::min);
+        let step = all[0].h + WS_GAP;
+        let x = all[0].x;
+
+        let mut items: Vec<&&WsLayout> = all.iter().filter(|wl| ws_id(wl) != dragged).collect();
+        items.sort_by(|a, b| a.y.total_cmp(&b.y));
+        let gap_idx = gap.filter(|(go, _)| *go == o).map(|(_, i)| i);
+
+        let mut slot = 0usize;
+        for (i, wl) in items.iter().enumerate() {
+            if gap_idx == Some(i) {
+                slot += 1;
+            }
+            targets.insert(ws_id(wl), (x, base + slot as f64 * step));
+            slot += 1;
+        }
+    }
+    targets
+}
+
+/// If (x,y) is on a column's body, return the column drag and its slot rect.
+fn hit_column(
+    layout: &Layout,
+    model: &Model,
+    x: f64,
+    y: f64,
+) -> Option<(DragKind, (f64, f64, f64, f64))> {
+    for wl in &layout.workspaces {
+        let wsv = &model.outputs[wl.o].workspaces[wl.wi];
+        for col in &wl.cols {
+            if x >= col.x && x <= col.x + col.w && y >= col.y && y <= col.y + col.h {
+                let win_id = wsv.windows[col.win_lin[0]].id;
+                return Some((
+                    DragKind::Column {
+                        ws_id: wsv.ws.id,
+                        col: col.col,
+                        win_id,
+                    },
+                    (col.x, col.y, col.w, col.h),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Column drop slot: which workspace card the cursor is over, and the insertion
+/// index among that workspace's columns.
+fn column_drop_target(
+    layout: &Layout,
+    model: &Model,
+    drag_ws: u64,
+    drag_col: i64,
+    cursor: (f64, f64),
+) -> Option<DropTarget> {
+    let wl = layout.workspaces.iter().find(|wl| {
+        cursor.0 >= wl.x && cursor.0 <= wl.x + wl.w && cursor.1 >= wl.y && cursor.1 <= wl.y + wl.h
+    })?;
+    let same_ws = model.outputs[wl.o].workspaces[wl.wi].ws.id == drag_ws;
+    let cols: Vec<&ColLayout> = wl
+        .cols
+        .iter()
+        .filter(|c| !(same_ws && c.col == drag_col))
+        .collect();
+    let mut idx = cols.len();
+    for (i, c) in cols.iter().enumerate() {
+        if cursor.0 < c.x + c.w / 2.0 {
+            idx = i;
+            break;
+        }
+    }
+    Some(DropTarget::Column {
+        o: wl.o,
+        wi: wl.wi,
+        idx,
+    })
+}
+
+/// Target on-screen top-left per (workspace id, column) with a gap opened at the
+/// drop slot — basis for the column slide animation.
+fn column_reflow(layout: &Layout, model: &Model, drag: &Drag) -> HashMap<(u64, i64), (f64, f64)> {
+    let mut targets = HashMap::new();
+    let DragKind::Column {
+        ws_id: src_ws,
+        col: dragged_col,
+        ..
+    } = drag.kind
+    else {
+        return targets;
+    };
+    let gap = match drag.target {
+        Some(DropTarget::Column { o, wi, idx }) => {
+            Some((model.outputs[o].workspaces[wi].ws.id, idx))
+        }
+        _ => None,
+    };
+
+    for wl in &layout.workspaces {
+        if wl.cols.is_empty() {
+            continue;
+        }
+        let wid = model.outputs[wl.o].workspaces[wl.wi].ws.id;
+        let is_src = wid == src_ws;
+        let cols: Vec<&ColLayout> = wl
+            .cols
+            .iter()
+            .filter(|c| !(is_src && c.col == dragged_col))
+            .collect();
+        let base_x = wl.x + 9.0;
+        let stepw = wl.cols[0].w;
+        let gap_idx = gap.filter(|(gw, _)| *gw == wid).map(|(_, i)| i);
+
+        let mut slot = 0usize;
+        for (i, c) in cols.iter().enumerate() {
+            if gap_idx == Some(i) {
+                slot += 1;
+            }
+            targets.insert((wid, c.col), (base_x + slot as f64 * stepw, c.y));
+            slot += 1;
+        }
+    }
+    targets
+}
+
+/// Recompute the drop target from the current cursor.
+fn recompute_target(state: &Rc<RefCell<State>>, w: f64, h: f64) {
+    let mut s = state.borrow_mut();
+    let Some(cursor) = s.drag.as_ref().map(|d| d.cursor) else {
+        return;
+    };
+    let kind = s.drag.as_ref().unwrap().kind.clone();
+    let layout = compute_layout(&s.model, w, h);
+    let target = match &kind {
+        DragKind::Workspace { id } => workspace_drop_target(&layout, &s.model, *id, cursor),
+        DragKind::Column { ws_id, col, .. } => {
+            column_drop_target(&layout, &s.model, *ws_id, *col, cursor)
+        }
+    };
+    if let Some(d) = s.drag.as_mut() {
+        d.target = target;
+    }
+}
+
+/// Ease the per-item animated positions toward their reflow targets. Returns
+/// false when there's no drag left (stops the tick).
+fn animate_step(state: &Rc<RefCell<State>>, w: f64, h: f64) -> bool {
+    enum Targets {
+        Ws(HashMap<u64, (f64, f64)>),
+        Col(HashMap<(u64, i64), (f64, f64)>),
+    }
+    let targets = {
+        let s = state.borrow();
+        let Some(drag) = s.drag.as_ref() else {
+            return false;
+        };
+        if !drag.active {
+            return true;
+        }
+        let layout = compute_layout(&s.model, w, h);
+        match &drag.kind {
+            DragKind::Workspace { .. } => Targets::Ws(workspace_reflow(&layout, &s.model, drag)),
+            DragKind::Column { .. } => Targets::Col(column_reflow(&layout, &s.model, drag)),
+        }
+    };
+    let mut s = state.borrow_mut();
+    match targets {
+        Targets::Ws(m) => {
+            for (id, tgt) in m {
+                let cur = s.anim_ws.entry(id).or_insert(tgt);
+                cur.0 += (tgt.0 - cur.0) * 0.35;
+                cur.1 += (tgt.1 - cur.1) * 0.35;
+            }
+        }
+        Targets::Col(m) => {
+            for (k, tgt) in m {
+                let cur = s.anim_col.entry(k).or_insert(tgt);
+                cur.0 += (tgt.0 - cur.0) * 0.35;
+                cur.1 += (tgt.1 - cur.1) * 0.35;
+            }
+        }
+    }
+    true
+}
+
+/// Apply a drop via niri actions, then clear the drag and refresh.
+fn apply_drop(state: &Rc<RefCell<State>>, kind: &DragKind, target: DropTarget) {
+    if let (DragKind::Workspace { id }, DropTarget::Workspace { o, idx }) = (kind, target) {
+        let (out_name, niri_idx, same) = {
+            let s = state.borrow();
+            let m = &s.model;
+            let out_name = m.outputs[o].name.clone();
+            let src_o = m
+                .outputs
+                .iter()
+                .position(|out| out.workspaces.iter().any(|wv| wv.ws.id == *id));
+            // Map the visible insertion slot to a niri index using neighbours'
+            // real (1-based) indices, so hidden trailing empties don't offset it.
+            let vis: Vec<i64> = m.outputs[o]
+                .workspaces
+                .iter()
+                .filter(|wv| wv.ws.id != *id)
+                .map(|wv| wv.ws.idx)
+                .collect();
+            let niri_idx = if idx < vis.len() {
+                vis[idx]
+            } else {
+                vis.last().map(|v| v + 1).unwrap_or(1)
+            };
+            (out_name, niri_idx, src_o == Some(o))
+        };
+        let focus = capture_focus();
+        if niri::focus_workspace_by_id(*id).is_ok() {
+            if !same {
+                let _ = niri::move_workspace_to_monitor_named(&out_name);
+            }
+            let _ = niri::move_workspace_to_index(niri_idx);
+        }
+        restore_focus(focus);
+    } else if let (DragKind::Column { ws_id, col, win_id }, DropTarget::Column { o, wi, idx }) =
+        (kind, target)
+    {
+        let (same_ws, same_monitor, out_name, target_ws_idx, col_niri) = {
+            let s = state.borrow();
+            let m = &s.model;
+            let same_ws = m.outputs[o].workspaces[wi].ws.id == *ws_id;
+            let src_o = m
+                .outputs
+                .iter()
+                .position(|out| out.workspaces.iter().any(|wv| wv.ws.id == *ws_id));
+            let out_name = m.outputs[o].name.clone();
+            let target_ws_idx = m.outputs[o].workspaces[wi].ws.idx;
+            // distinct column indices of the target workspace (drop dragged if same ws)
+            let mut tcols: Vec<i64> = m.outputs[o].workspaces[wi]
+                .windows
+                .iter()
+                .map(|wv| wv.column())
+                .collect();
+            tcols.sort_unstable();
+            tcols.dedup();
+            if same_ws {
+                tcols.retain(|c| c != col);
+            }
+            let col_niri = if idx < tcols.len() {
+                tcols[idx]
+            } else {
+                tcols.last().map(|v| v + 1).unwrap_or(1)
+            };
+            (same_ws, src_o == Some(o), out_name, target_ws_idx, col_niri)
+        };
+        let focus = capture_focus();
+        if niri::focus_window(*win_id).is_ok() {
+            if same_ws {
+                let _ = niri::move_column_to_index(col_niri);
+            } else if same_monitor {
+                let _ = niri::move_column_to_workspace(&target_ws_idx.to_string());
+            } else {
+                let _ = niri::move_column_to_monitor(&out_name);
+                let _ = niri::move_column_to_workspace(&target_ws_idx.to_string());
+            }
+        }
+        restore_focus(focus);
+    }
+    {
+        let mut s = state.borrow_mut();
+        s.drag = None;
+        s.anim_ws.clear();
+        s.anim_col.clear();
+    }
+    refresh(state);
+}
+
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let t = state.theme();
 
@@ -1148,11 +1634,102 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         );
     }
 
-    // Workspace cards.
-    for wl in &layout.workspaces {
-        let wsv = &outputs[wl.o].workspaces[wl.wi];
-        let ws_selected = sel == Some((wl.o, wl.wi));
-        draw_workspace(cr, wl, wsv, ws_selected, state.sel_win, t);
+    // Active drag (if any), by kind.
+    let active = state.drag.as_ref().filter(|d| d.active);
+    let dragged_ws = active.and_then(|d| match &d.kind {
+        DragKind::Workspace { id } => Some((d, *id)),
+        _ => None,
+    });
+    let dragged_col = active.and_then(|d| match &d.kind {
+        DragKind::Column { ws_id, col, .. } => Some((d, *ws_id, *col)),
+        _ => None,
+    });
+
+    if let Some((d, dragged)) = dragged_ws {
+        // Workspace drag: neighbours reflow to their animated slots; the grabbed
+        // card floats under the cursor.
+        for wl in &layout.workspaces {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            if wsv.ws.id == dragged {
+                continue;
+            }
+            let (ax, ay) = state
+                .anim_ws
+                .get(&wsv.ws.id)
+                .copied()
+                .unwrap_or((wl.x, wl.y));
+            draw_workspace(cr, wl, ax - wl.x, ay - wl.y, wsv, false, state.sel_win, t);
+        }
+        if let Some(wl) = layout
+            .workspaces
+            .iter()
+            .find(|wl| outputs[wl.o].workspaces[wl.wi].ws.id == dragged)
+        {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            let (fx, fy) = (d.cursor.0 - d.grab.0, d.cursor.1 - d.grab.1);
+            set_rgba(cr, 0.0, 0.0, 0.0, 0.35);
+            rounded_rect(cr, fx + 3.0, fy + 6.0, wl.w, wl.h, 10.0);
+            let _ = cr.fill();
+            draw_workspace(cr, wl, fx - wl.x, fy - wl.y, wsv, true, state.sel_win, t);
+        }
+    } else if let Some((d, src_ws, dcol)) = dragged_col {
+        // Column drag: cards stay put; columns reflow; the grabbed column floats.
+        for wl in &layout.workspaces {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            draw_workspace_chrome(cr, wl, 0.0, 0.0, wsv, false, t);
+            for col in &wl.cols {
+                if wsv.ws.id == src_ws && col.col == dcol {
+                    continue;
+                }
+                let (ax, ay) = state
+                    .anim_col
+                    .get(&(wsv.ws.id, col.col))
+                    .copied()
+                    .unwrap_or((col.x, col.y));
+                draw_column(
+                    cr,
+                    col,
+                    ax - col.x,
+                    ay - col.y,
+                    wsv,
+                    state.sel_win,
+                    false,
+                    t,
+                );
+            }
+        }
+        if let Some((wl, col)) = layout.workspaces.iter().find_map(|wl| {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            (wsv.ws.id == src_ws)
+                .then(|| wl.cols.iter().find(|c| c.col == dcol).map(|c| (wl, c)))
+                .flatten()
+        }) {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            let (fx, fy) = (d.cursor.0 - d.grab.0, d.cursor.1 - d.grab.1);
+            // Lift the floating column onto its own card.
+            set_rgba(cr, 0.0, 0.0, 0.0, 0.35);
+            rounded_rect(cr, fx + 3.0, fy + 6.0, col.w, col.h, 8.0);
+            let _ = cr.fill();
+            set(cr, t.surface, 1.0);
+            rounded_rect(cr, fx, fy, col.w, col.h, 8.0);
+            let _ = cr.fill();
+            draw_column(
+                cr,
+                col,
+                fx - col.x,
+                fy - col.y,
+                wsv,
+                state.sel_win,
+                false,
+                t,
+            );
+        }
+    } else {
+        for wl in &layout.workspaces {
+            let wsv = &outputs[wl.o].workspaces[wl.wi];
+            let ws_selected = sel == Some((wl.o, wl.wi));
+            draw_workspace(cr, wl, 0.0, 0.0, wsv, ws_selected, state.sel_win, t);
+        }
     }
 
     if state.picker.is_some() {
@@ -1329,19 +1906,20 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_workspace(
+/// Draw a workspace card's chrome (background, border, header, separator), but
+/// not its columns. `(dx, dy)` shifts it from its home position.
+fn draw_workspace_chrome(
     cr: &gtk::cairo::Context,
     wl: &WsLayout,
+    dx: f64,
+    dy: f64,
     wsv: &WsView,
     selected: bool,
-    sel_win: usize,
     t: &Theme,
 ) {
     const R: f64 = 10.0;
-    let (x, y, w, h) = (wl.x, wl.y, wl.w, wl.h);
+    let (x, y, w, h) = (wl.x + dx, wl.y + dy, wl.w, wl.h);
 
-    // Workspace card background.
     if selected {
         set(cr, t.selected_card(), 1.0);
     } else {
@@ -1350,7 +1928,6 @@ fn draw_workspace(
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
-    // Border: accent if selected, faint otherwise.
     if selected {
         set(cr, t.accent, 1.0);
         cr.set_line_width(2.0);
@@ -1364,7 +1941,6 @@ fn draw_workspace(
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.stroke();
 
-    // Workspace header label.
     cr.select_font_face(
         "sans-serif",
         gtk::cairo::FontSlant::Normal,
@@ -1381,7 +1957,6 @@ fn draw_workspace(
     let header = format!("{}   ({} win)", wsv.ws.label(), wsv.windows.len());
     text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, w - 22.0));
 
-    // Thin separator under the header.
     set(cr, t.text, 0.08);
     cr.set_line_width(1.0);
     cr.move_to(x + 10.0, y + WS_HEADER_H - 5.0);
@@ -1397,19 +1972,55 @@ fn draw_workspace(
         set(cr, t.subtext, 0.75);
         cr.set_font_size(12.0);
         text_at(cr, x + 11.0, y + WS_HEADER_H + 18.0, "(empty)");
-        return;
     }
+}
 
-    // Windows, laid out from the precomputed column slots.
+/// Draw one column's windows, shifted by `(dx, dy)` from its home slot.
+#[allow(clippy::too_many_arguments)]
+fn draw_column(
+    cr: &gtk::cairo::Context,
+    col: &ColLayout,
+    dx: f64,
+    dy: f64,
+    wsv: &WsView,
+    sel_win: usize,
+    ws_selected: bool,
+    t: &Theme,
+) {
+    let rows = col.win_lin.len().max(1);
+    let rh = col.h / rows as f64;
+    for (r, &lin) in col.win_lin.iter().enumerate() {
+        let cx = col.x + dx;
+        let ry = col.y + dy + r as f64 * rh;
+        let win = &wsv.windows[lin];
+        let win_selected = ws_selected && lin == sel_win;
+        draw_window(
+            cr,
+            cx + 3.0,
+            ry + 3.0,
+            col.w - 6.0,
+            rh - 6.0,
+            win,
+            win_selected,
+            t,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_workspace(
+    cr: &gtk::cairo::Context,
+    wl: &WsLayout,
+    dx: f64,
+    dy: f64,
+    wsv: &WsView,
+    selected: bool,
+    sel_win: usize,
+    t: &Theme,
+) {
+    draw_workspace_chrome(cr, wl, dx, dy, wsv, selected, t);
     for col in &wl.cols {
-        let rows = col.win_lin.len().max(1);
-        let rh = col.h / rows as f64;
-        for (r, &lin) in col.win_lin.iter().enumerate() {
-            let ry = col.y + r as f64 * rh;
-            let win = &wsv.windows[lin];
-            let win_selected = selected && lin == sel_win;
-            draw_window(cr, col.x + 3.0, ry + 3.0, col.w - 6.0, rh - 6.0, win, win_selected, t);
-        }
+        draw_column(cr, col, dx, dy, wsv, sel_win, selected, t);
     }
 }
 
