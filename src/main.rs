@@ -773,22 +773,22 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let content_w = w - 2.0 * PAD;
     let content_h = (h - PAD - FOOTER_H) - content_y;
 
-    // Map niri's logical output rectangles into the content area, preserving
-    // their relative positions and proportions (like the real overview).
+    // Place outputs by their real horizontal position and proportional size,
+    // but align all tops to a common edge — the configured vertical offset
+    // between screens (e.g. HDMI at y=360) would otherwise leave an empty band.
     let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
-    let min_y = outputs.iter().map(|o| o.y).fold(f64::INFINITY, f64::min);
     let max_x = outputs.iter().map(|o| o.x + o.w).fold(f64::NEG_INFINITY, f64::max);
-    let max_y = outputs.iter().map(|o| o.y + o.h).fold(f64::NEG_INFINITY, f64::max);
+    let max_h = outputs.iter().map(|o| o.h).fold(0.0_f64, f64::max);
     let span_w = (max_x - min_x).max(1.0);
-    let span_h = (max_y - min_y).max(1.0);
+    let span_h = max_h.max(1.0);
     let scale = (content_w / span_w).min(content_h / span_h);
-    // Centre the scaled bounding box within the content area.
+    // Centre the scaled block within the content area.
     let off_x = content_x + (content_w - span_w * scale) / 2.0;
     let off_y = content_y + (content_h - span_h * scale) / 2.0;
 
     for (i, output) in outputs.iter().enumerate() {
         let ox = off_x + (output.x - min_x) * scale;
-        let oy = off_y + (output.y - min_y) * scale;
+        let oy = off_y;
         let ow = output.w * scale;
         let oh = output.h * scale;
 

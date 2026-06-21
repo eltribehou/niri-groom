@@ -9,11 +9,12 @@ workspace or a single window from the keyboard with no confirmation.
 ## What it does
 
 - Reads the live state via `niri msg --json workspaces` and `niri msg --json windows`.
-- Places each output where niri actually has it: `niri msg --json outputs` gives
-  every output's `logical` rectangle (x/y/width/height), and I map those into the
-  view proportionally (preserving relative position and size), so a screen on the
-  left/right/below shows up there. Falls back to a synthetic row if positions are
-  unavailable.
+- Places each output by its real horizontal position: `niri msg --json outputs`
+  gives every output's `logical` rectangle (x/y/width/height); I map the `x`/width
+  into the view proportionally so a screen on the left/right shows up there, at its
+  relative size. Tops are aligned to a common edge — a configured vertical offset
+  (e.g. `HDMI-A-1 position y=360`) is intentionally *not* reproduced, since it would
+  just leave an empty band. Falls back to a synthetic row if positions are missing.
 - Draws each output's workspaces (stacked, labelled by name + window count), and
   the windows inside each workspace laid out by their real scrolling-layout position
   (`layout.pos_in_scrolling_layout` → column, row).
