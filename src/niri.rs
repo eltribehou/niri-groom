@@ -124,6 +124,26 @@ pub fn fetch_windows() -> Result<Vec<Window>, String> {
     niri_json("windows")
 }
 
+/// Spawn `niri msg --json event-stream` with its stdout piped. niri emits one
+/// JSON event per line whenever workspaces/windows/etc. change, so reading this
+/// lets me refresh on change instead of polling.
+pub fn spawn_event_stream() -> Option<std::process::Child> {
+    let mut cmd = Command::new("niri");
+    cmd.args(["msg", "--json", "event-stream"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    // Have the child die with us, so a `niri msg event-stream` can't linger as
+    // an orphan if we're killed before it next writes (and hits SIGPIPE).
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong);
+            Ok(())
+        });
+    }
+    cmd.spawn().ok()
+}
+
 /// `niri msg --json outputs` is an object keyed by connector name; I just want
 /// the values (each carries its own `name`).
 pub fn fetch_outputs() -> Result<Vec<Output>, String> {

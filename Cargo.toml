@@ -11,7 +11,9 @@ keywords = ["niri", "wayland", "layer-shell", "gtk4", "overlay"]
 categories = ["gui", "command-line-utilities"]
 
 [dependencies]
+async-channel = "2"
 gtk4 = "0.11"
+libc = "0.2"
 gtk4-layer-shell = "0.8"
 kdl = "6"
 serde = { version = "1", features = ["derive"] }

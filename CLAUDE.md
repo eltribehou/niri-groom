@@ -23,7 +23,13 @@ workspace or a single window from the keyboard with no confirmation.
   per monitor (plus transient empties after moves); these are scratch space that
   can't be meaningfully killed, so showing them only confuses. Named empty
   workspaces are kept (you can still rename or kill them).
-- Refreshes on an 800ms timer so the map keeps up with the compositor.
+- Refreshes on niri's event stream (`niri msg --json event-stream`): a worker
+  thread reads one JSON line per change and pings a `bounded(1)` channel that the
+  GTK loop awaits, so the map re-fetches near-instantly on change instead of
+  polling. The channel coalesces bursts (extra pings dropped while one is
+  queued). A slow 2s timer remains as a fallback (e.g. for output-geometry
+  changes niri may not emit an event for). The event-stream child is spawned
+  with `PR_SET_PDEATHSIG` so it can't outlive the app.
 - Kills windows with `niri msg action close-window --id <id>`. "Killing a workspace"
   means closing every window it holds (niri keeps named/empty workspaces around by
   design, so an empty workspace is a no-op).
@@ -134,6 +140,8 @@ otherwise deadlocks input until the app is killed).
   fullscreen overlay surface and grab the keyboard.
 - **serde / serde_json** to parse the niri IPC output.
 - **kdl** (crate 6) to read/write the KDL config, preserving comments on save.
+- **async-channel** to hand event-stream pings from the reader thread to the GTK
+  main loop, and **libc** for the child's `PR_SET_PDEATHSIG`.
 
 Text is drawn with cairo's toy font API (`select_font_face` / `show_text`) and
 truncated with an ellipsis to fit — deliberately no pango dependency, the labels are

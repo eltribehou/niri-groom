@@ -16,6 +16,7 @@ use gtk::{Application, ApplicationWindow, DrawingArea, EventControllerKey};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::io::BufRead;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -469,11 +470,44 @@ fn build_ui(app: &Application) {
     window.set_child(Some(&area));
     window.present();
 
-    // Live refresh on a timer so the map keeps up with the compositor.
+    // Refresh on niri's event stream: a background thread reads one JSON line
+    // per change and pings a bounded(1) channel; the channel coalesces bursts
+    // (extra pings are dropped while one is queued) so the UI re-fetches once,
+    // near-instantly, per change instead of polling.
+    {
+        let (tx, rx) = async_channel::bounded::<()>(1);
+        std::thread::spawn(move || {
+            let Some(mut child) = niri::spawn_event_stream() else {
+                return;
+            };
+            if let Some(out) = child.stdout.take() {
+                let reader = std::io::BufReader::new(out);
+                for line in reader.lines() {
+                    if line.is_err() {
+                        break;
+                    }
+                    let _ = tx.try_send(());
+                }
+            }
+            let _ = child.wait();
+        });
+
+        let state = state.clone();
+        let area = area.clone();
+        glib::spawn_future_local(async move {
+            while rx.recv().await.is_ok() {
+                refresh(&state);
+                area.queue_draw();
+            }
+        });
+    }
+
+    // Slow fallback poll, in case the event stream is unavailable or misses a
+    // change niri doesn't emit an event for (e.g. an output reconfiguration).
     {
         let state = state.clone();
         let area = area.clone();
-        glib::timeout_add_local(Duration::from_millis(800), move || {
+        glib::timeout_add_local(Duration::from_millis(2000), move || {
             refresh(&state);
             area.queue_draw();
             glib::ControlFlow::Continue
