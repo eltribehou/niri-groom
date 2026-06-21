@@ -1072,11 +1072,11 @@ fn draw_window(
         if selected {
             set_rgba(cr, 0.06, 0.11, 0.20, 1.0);
         } else {
-            set_rgba(cr, 0.80, 0.85, 0.93, 1.0);
+            set_rgba(cr, 0.82, 0.87, 0.95, 1.0);
         }
-        cr.set_font_size(12.0);
+        cr.set_font_size(13.0);
         if let Some(app_id) = &win.app_id {
-            text_at(cr, tx, y + 19.0, &fit_text(cr, app_id, text_w));
+            text_at(cr, tx, y + 20.0, &fit_text(cr, app_id, text_w));
         }
 
         // title — primary, bold and larger.
