@@ -956,6 +956,137 @@ fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, s: &str) {
     let _ = cr.show_text(s);
 }
 
+/// A column's on-screen slot within a workspace card.
+struct ColLayout {
+    /// niri column index (1-based) — used for `move-column-to-index`.
+    #[allow(dead_code)]
+    col: i64,
+    /// Linear indices into the workspace's `windows`, top to bottom.
+    win_lin: Vec<usize>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// A workspace card's on-screen rect, with its columns.
+struct WsLayout {
+    o: usize,
+    wi: usize,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    cols: Vec<ColLayout>,
+}
+
+struct OutLayout {
+    o: usize,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// The positioned boxes for the whole map. Computed once per frame and shared by
+/// rendering and (later) pointer hit-testing, so geometry lives in one place.
+struct Layout {
+    outputs: Vec<OutLayout>,
+    workspaces: Vec<WsLayout>,
+}
+
+fn compute_layout(model: &Model, w: f64, h: f64) -> Layout {
+    let mut layout = Layout {
+        outputs: Vec::new(),
+        workspaces: Vec::new(),
+    };
+    let outputs = &model.outputs;
+    if outputs.is_empty() {
+        return layout;
+    }
+
+    let content_x = PAD;
+    let content_y = PAD;
+    let content_w = w - 2.0 * PAD;
+    let content_h = (h - PAD - FOOTER_H) - content_y;
+
+    let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
+    let max_x = outputs
+        .iter()
+        .map(|o| o.x + o.w)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let span_w = (max_x - min_x).max(1.0);
+    let scale_x = content_w / span_w;
+
+    for (i, output) in outputs.iter().enumerate() {
+        let ox = content_x + (output.x - min_x) * scale_x;
+        let oy = content_y;
+        let ow = output.w * scale_x;
+        let oh = content_h;
+        layout.outputs.push(OutLayout {
+            o: i,
+            x: ox,
+            y: oy,
+            w: ow,
+            h: oh,
+        });
+
+        let wx = ox + 8.0;
+        let ww = ow - 16.0;
+        let wy0 = oy + OUTPUT_HEADER_H;
+        let avail_h = oh - OUTPUT_HEADER_H - 8.0;
+        let m = output.workspaces.len();
+        if m == 0 {
+            continue;
+        }
+        let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(28.0);
+
+        for (j, wsv) in output.workspaces.iter().enumerate() {
+            let wy = wy0 + j as f64 * (ws_h + WS_GAP);
+            let mut cols: Vec<ColLayout> = Vec::new();
+            if !wsv.windows.is_empty() {
+                let inner_x = wx + 9.0;
+                let inner_y = wy + WS_HEADER_H;
+                let inner_w = ww - 18.0;
+                let inner_h = ws_h - WS_HEADER_H - 9.0;
+
+                // Group consecutive windows sharing a niri column.
+                let mut groups: Vec<(i64, Vec<usize>)> = Vec::new();
+                let mut last: Option<i64> = None;
+                for (idx, win) in wsv.windows.iter().enumerate() {
+                    let c = win.column();
+                    if last != Some(c) {
+                        groups.push((c, Vec::new()));
+                        last = Some(c);
+                    }
+                    groups.last_mut().unwrap().1.push(idx);
+                }
+                let cw = inner_w / groups.len() as f64;
+                for (k, (col, lins)) in groups.into_iter().enumerate() {
+                    cols.push(ColLayout {
+                        col,
+                        win_lin: lins,
+                        x: inner_x + k as f64 * cw,
+                        y: inner_y,
+                        w: cw,
+                        h: inner_h,
+                    });
+                }
+            }
+            layout.workspaces.push(WsLayout {
+                o: i,
+                wi: j,
+                x: wx,
+                y: wy,
+                w: ww,
+                h: ws_h,
+                cols,
+            });
+        }
+    }
+    layout
+}
+
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let t = state.theme();
 
@@ -994,36 +1125,14 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         None
     };
 
-    let content_x = PAD;
-    let content_y = PAD;
-    let content_w = w - 2.0 * PAD;
-    let content_h = (h - PAD - FOOTER_H) - content_y;
+    let layout = compute_layout(&state.model, w, h);
 
-    // Place outputs by their real horizontal position and proportional width,
-    // so the left/right arrangement is faithful. Vertically the axes are
-    // decoupled: tops align to the content top and every output uses the full
-    // height (the configured y-offset between screens isn't reproduced — it'd
-    // just waste space in a survey view).
-    let min_x = outputs.iter().map(|o| o.x).fold(f64::INFINITY, f64::min);
-    let max_x = outputs
-        .iter()
-        .map(|o| o.x + o.w)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let span_w = (max_x - min_x).max(1.0);
-    let scale_x = content_w / span_w;
-
-    for (i, output) in outputs.iter().enumerate() {
-        let ox = content_x + (output.x - min_x) * scale_x;
-        let oy = content_y;
-        let ow = output.w * scale_x;
-        let oh = content_h;
-
-        // Subtle grouping panel for the screen's extent.
+    // Output panels + headers.
+    for ol in &layout.outputs {
         set(cr, t.text, 0.03);
-        rounded_rect(cr, ox, oy, ow, oh, 14.0);
+        rounded_rect(cr, ol.x, ol.y, ol.w, ol.h, 14.0);
         let _ = cr.fill();
 
-        // Output header.
         cr.select_font_face(
             "sans-serif",
             gtk::cairo::FontSlant::Normal,
@@ -1033,26 +1142,17 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         cr.set_font_size(17.0);
         text_at(
             cr,
-            ox + 12.0,
-            oy + 21.0,
-            &fit_text(cr, &output.name, ow - 24.0),
+            ol.x + 12.0,
+            ol.y + 21.0,
+            &fit_text(cr, &outputs[ol.o].name, ol.w - 24.0),
         );
+    }
 
-        let wx = ox + 8.0;
-        let ww = ow - 16.0;
-        let wy0 = oy + OUTPUT_HEADER_H;
-        let avail_h = oh - OUTPUT_HEADER_H - 8.0;
-        let m = output.workspaces.len();
-        if m == 0 {
-            continue;
-        }
-        let ws_h = ((avail_h - (m as f64 - 1.0) * WS_GAP) / m as f64).max(28.0);
-
-        for (j, wsv) in output.workspaces.iter().enumerate() {
-            let wy = wy0 + j as f64 * (ws_h + WS_GAP);
-            let ws_selected = sel == Some((i, j));
-            draw_workspace(cr, wx, wy, ww, ws_h, wsv, ws_selected, state.sel_win, t);
-        }
+    // Workspace cards.
+    for wl in &layout.workspaces {
+        let wsv = &outputs[wl.o].workspaces[wl.wi];
+        let ws_selected = sel == Some((wl.o, wl.wi));
+        draw_workspace(cr, wl, wsv, ws_selected, state.sel_win, t);
     }
 
     if state.picker.is_some() {
@@ -1232,16 +1332,14 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
 #[allow(clippy::too_many_arguments)]
 fn draw_workspace(
     cr: &gtk::cairo::Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
+    wl: &WsLayout,
     wsv: &WsView,
     selected: bool,
     sel_win: usize,
     t: &Theme,
 ) {
     const R: f64 = 10.0;
+    let (x, y, w, h) = (wl.x, wl.y, wl.w, wl.h);
 
     // Workspace card background.
     if selected {
@@ -1290,12 +1388,6 @@ fn draw_workspace(
     cr.line_to(x + w - 10.0, y + WS_HEADER_H - 5.0);
     let _ = cr.stroke();
 
-    // Window area.
-    let inner_x = x + 9.0;
-    let inner_y = y + WS_HEADER_H;
-    let inner_w = w - 18.0;
-    let inner_h = h - WS_HEADER_H - 9.0;
-
     if wsv.windows.is_empty() {
         cr.select_font_face(
             "sans-serif",
@@ -1304,40 +1396,19 @@ fn draw_workspace(
         );
         set(cr, t.subtext, 0.75);
         cr.set_font_size(12.0);
-        text_at(cr, inner_x + 2.0, inner_y + 18.0, "(empty)");
+        text_at(cr, x + 11.0, y + WS_HEADER_H + 18.0, "(empty)");
         return;
     }
 
-    // Group windows into columns (preserving the sorted order = linear index).
-    let mut columns: Vec<Vec<(usize, &niri::Window)>> = Vec::new();
-    let mut last_col: Option<i64> = None;
-    for (idx, win) in wsv.windows.iter().enumerate() {
-        if last_col != Some(win.column()) {
-            columns.push(Vec::new());
-            last_col = Some(win.column());
-        }
-        columns.last_mut().unwrap().push((idx, win));
-    }
-
-    let col_count = columns.len();
-    let cw = inner_w / col_count as f64;
-    for (k, column) in columns.iter().enumerate() {
-        let cx = inner_x + k as f64 * cw;
-        let rows = column.len();
-        let rh = inner_h / rows as f64;
-        for (r, (lin_idx, win)) in column.iter().enumerate() {
-            let ry = inner_y + r as f64 * rh;
-            let win_selected = selected && *lin_idx == sel_win;
-            draw_window(
-                cr,
-                cx + 3.0,
-                ry + 3.0,
-                cw - 6.0,
-                rh - 6.0,
-                win,
-                win_selected,
-                t,
-            );
+    // Windows, laid out from the precomputed column slots.
+    for col in &wl.cols {
+        let rows = col.win_lin.len().max(1);
+        let rh = col.h / rows as f64;
+        for (r, &lin) in col.win_lin.iter().enumerate() {
+            let ry = col.y + r as f64 * rh;
+            let win = &wsv.windows[lin];
+            let win_selected = selected && lin == sel_win;
+            draw_window(cr, col.x + 3.0, ry + 3.0, col.w - 6.0, rh - 6.0, win, win_selected, t);
         }
     }
 }
