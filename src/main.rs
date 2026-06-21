@@ -175,6 +175,10 @@ struct State {
     picker: Option<usize>,
     /// Whether the key legend panel is shown (toggled with `?`).
     show_help: bool,
+    /// Whether the overlay currently has keyboard focus. When it doesn't (e.g.
+    /// it's left running as a map on another monitor), the groom selection is
+    /// hidden so only niri's own focus highlight remains.
+    active: bool,
     error: Option<String>,
 }
 
@@ -389,6 +393,7 @@ fn build_ui(app: &Application) {
         theme_idx,
         picker: None,
         show_help: false,
+        active: true,
         error: None,
     }));
     // Open the overlay on the currently focused workspace.
@@ -449,6 +454,17 @@ fn build_ui(app: &Application) {
         });
     }
     window.add_controller(key);
+
+    // Track keyboard focus so the groom selection can hide when the overlay is
+    // left running unfocused (e.g. as a map on a second monitor).
+    {
+        let state = state.clone();
+        let area = area.clone();
+        window.connect_is_active_notify(move |win| {
+            state.borrow_mut().active = win.is_active();
+            area.queue_draw();
+        });
+    }
 
     window.set_child(Some(&area));
     window.present();
@@ -936,7 +952,13 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         return;
     }
 
-    let sel = state.model.nav.get(state.sel_nav).copied();
+    // Only show the groom selection while the overlay is focused; when it's an
+    // unfocused background map, drop it so only niri's own highlight shows.
+    let sel = if state.active {
+        state.model.nav.get(state.sel_nav).copied()
+    } else {
+        None
+    };
 
     let content_x = PAD;
     let content_y = PAD;
@@ -1005,7 +1027,8 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         draw_rename(cr, w, h, edit, t);
     } else if state.show_help {
         draw_help(cr, w, h, t);
-    } else {
+    } else if state.active {
+        // The hint is interaction guidance; hide it on the passive map too.
         draw_hint(cr, w, h, t);
     }
 }

@@ -103,9 +103,21 @@ that disturbs focus, I record the previously focused workspace first and refocus
 it afterwards (by id, re-reading state since the reorder shifts indices), leaving
 focus where the user left it.
 
-The overlay uses `KeyboardMode::Exclusive`, so while it is open it grabs the whole
-keyboard. That's intentional (it's a transient modal tool), but it means I should
-**never run it unattended without an auto-kill timeout** — see Testing below.
+The overlay uses `KeyboardMode::Exclusive`: while it is **focused** it grabs the
+whole keyboard. niri releases that grab when the surface loses focus (e.g. you
+focus another monitor), so it does *not* trap the keyboard when left running in
+the background — which makes the two usage modes possible: a quick grooming
+session (launch, act, quit) or a persistent map left on a second monitor. (For
+automated testing there's usually no second surface to focus away to, so it
+stays focused/grabbing — **never run it unattended in a test without an auto-kill
+timeout**; see Testing below.)
+
+When the overlay is **not** focused, its own selection cursor (the accent
+border on the selected workspace/window) and the `? keys` hint are hidden, so a
+background map shows only niri's "you are here" focus highlight rather than a
+stale selection competing for attention. This is driven by GTK's
+`Window::is_active` (`State::active`); in the focused grooming flow it's always
+active, so nothing changes there.
 
 It's single-instance: `GApplication` (the default unique behaviour, keyed on the
 app id) forwards a second launch's `activate` to the running instance and the
