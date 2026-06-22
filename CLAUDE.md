@@ -154,8 +154,37 @@ applies the theme **live** to the whole overlay; `Enter` saves it, `Esc` reverts
 The config (`src/config.rs`) is `$XDG_CONFIG_HOME/niri-groom/niri-groom.kdl`
 (falling back to `~/.config/...`), created with the default on first run. It's
 read at startup and rewritten on save via the `kdl` crate, which round-trips the
-document so comments and any other keys survive. Schema today is just
-`theme "<name>"`. The default is catppuccin-mocha.
+document so comments and any other keys survive. The schema is `theme
+"<name>"` (default catppuccin-mocha) and an optional `workspace-badges
+command="..."` (see below).
+
+## Workspace badges
+
+I can flag workspaces with a small colored pill — I use it to surface the
+workspace *bookmarks* my niri config maintains, but the app deliberately knows
+nothing about bookmarks. The mechanism is generic (`src/badges.rs`): a config
+key `workspace-badges command="<cmd>"` names a command I run (via `sh -c`, so
+`~`/pipes work) on startup and on every refresh. It prints one tab-separated
+line per workspace to mark:
+
+```
+<workspace-name>\t<label>[\t#rrggbb]
+```
+
+I match by workspace **name** (case-insensitively, like niri) and draw a pill
+with `<label>` in the top-right of the card. The pill color is the optional
+third field, falling back to the theme's `marker` color (each palette's
+yellow/gold, distinct from `accent`/`urgent`). The pill is the *only* mark —
+there's no colored border (an earlier version outlined the card too, but the
+pill alone reads more cleanly). An empty label therefore shows nothing. Badges
+are decorative: a missing/failing command or unparseable output just yields no
+badges, never an error.
+
+Keeping the *definition* of a "bookmark" outside the app is the whole point — my
+bookmarks live as `<key> { focus-workspace "<name>"; }` binds in
+`~/.config/niri/bookmarks.kdl`, and a one-line `niri-groom-badges.sh` greps that
+into the tab-separated format. niri doesn't expose configured binds over IPC, so
+that knowledge can only come from such a command.
 
 `Enter` focuses the *selected window* (`focus-window`), falling back to the
 workspace when it's empty. It only quits the overlay when the target is on the
@@ -230,6 +259,8 @@ short.
 - `src/theme.rs` — the `Theme` struct, derived-color helpers, and the bundled
   theme presets.
 - `src/config.rs` — locating, creating, reading and writing the KDL config.
+- `src/badges.rs` — running the optional `workspace-badges` command and parsing
+  its tab-separated output into the per-workspace badge map.
 
 ## Dev environment
 

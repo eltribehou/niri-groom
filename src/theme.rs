@@ -22,6 +22,17 @@ fn rgb(hex: u32) -> Rgb {
     )
 }
 
+/// Parse a `#rrggbb` (or bare `rrggbb`) hex color. Used for the optional
+/// per-entry color a badge command may emit; returns `None` on anything else,
+/// so a malformed color just falls back to the theme's `marker`.
+pub fn parse_hex(s: &str) -> Option<Rgb> {
+    let s = s.strip_prefix('#').unwrap_or(s);
+    if s.len() != 6 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(s, 16).ok().map(rgb)
+}
+
 #[derive(Clone)]
 pub struct Theme {
     pub name: &'static str,
@@ -32,6 +43,10 @@ pub struct Theme {
     pub subtext: Rgb,
     pub accent: Rgb,
     pub urgent: Rgb,
+    /// Color for workspaces flagged by a badge command (e.g. my niri
+    /// bookmarks). Each palette's yellow/gold — deliberately distinct from
+    /// `accent` (the selection) and `urgent`.
+    pub marker: Rgb,
 }
 
 impl Theme {
@@ -64,6 +79,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xa6adc8),
             accent: rgb(0x89b4fa),
             urgent: rgb(0xf38ba8),
+            marker: rgb(0xf9e2af),
         },
         Theme {
             name: "catppuccin-macchiato",
@@ -74,6 +90,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xa5adcb),
             accent: rgb(0x8aadf4),
             urgent: rgb(0xed8796),
+            marker: rgb(0xeed49f),
         },
         Theme {
             name: "catppuccin-latte",
@@ -84,6 +101,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0x6c6f85),
             accent: rgb(0x1e66f5),
             urgent: rgb(0xd20f39),
+            marker: rgb(0xdf8e1d),
         },
         Theme {
             name: "gruvbox-material",
@@ -94,6 +112,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xa89984),
             accent: rgb(0x7daea3),
             urgent: rgb(0xea6962),
+            marker: rgb(0xd8a657),
         },
         Theme {
             name: "gruvbox-light",
@@ -104,6 +123,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0x7c6f64),
             accent: rgb(0x458588),
             urgent: rgb(0xcc241d),
+            marker: rgb(0xb57614),
         },
         Theme {
             name: "tokyo-night",
@@ -114,6 +134,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xa9b1d6),
             accent: rgb(0x7aa2f7),
             urgent: rgb(0xf7768e),
+            marker: rgb(0xe0af68),
         },
         Theme {
             name: "nord",
@@ -124,6 +145,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xabb2c0),
             accent: rgb(0x88c0d0),
             urgent: rgb(0xbf616a),
+            marker: rgb(0xebcb8b),
         },
         Theme {
             name: "dracula",
@@ -134,6 +156,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0xa0a4c0),
             accent: rgb(0xbd93f9),
             urgent: rgb(0xff5555),
+            marker: rgb(0xf1fa8c),
         },
         Theme {
             name: "rose-pine",
@@ -144,6 +167,7 @@ pub fn all() -> Vec<Theme> {
             subtext: rgb(0x908caa),
             accent: rgb(0xc4a7e7),
             urgent: rgb(0xeb6f92),
+            marker: rgb(0xf6c177),
         },
     ]
 }

@@ -2,6 +2,7 @@
 //! and windows as a proportional map, and lets me kill a whole workspace (`w`)
 //! or a single window (`x`) with no confirmation.
 
+mod badges;
 mod config;
 mod niri;
 mod theme;
@@ -217,6 +218,10 @@ struct State {
     active: bool,
     /// When `Some(o)`, "solo" mode: only output `o` is shown, full-width.
     solo: Option<usize>,
+    /// Optional command that supplies per-workspace badges (e.g. my niri
+    /// bookmarks), and its last-fetched result keyed by lowercased name.
+    badge_cmd: Option<String>,
+    badges: HashMap<String, badges::Badge>,
     /// In-progress pointer drag (freezes refresh so the layout stays put).
     drag: Option<Drag>,
     /// Eased on-screen top-left per workspace id and per column, so neighbours
@@ -376,6 +381,12 @@ fn refresh(state: &Rc<RefCell<State>>) {
         Err(e) => {
             s.error = Some(e);
         }
+    }
+
+    // Re-pull badges (cheap external command) so a freshly-bookmarked workspace
+    // shows up without restarting the overlay.
+    if let Some(cmd) = s.badge_cmd.clone() {
+        s.badges = badges::load(&cmd);
     }
 
     // Re-find the previously selected workspace.
@@ -543,6 +554,8 @@ fn build_ui(app: &Application, opts: &Opts) {
     let theme_idx = config::load_theme()
         .and_then(|name| theme::index_of(&name))
         .unwrap_or(0);
+    let badge_cmd = config::load_badge_command();
+    let badges = badge_cmd.as_deref().map(badges::load).unwrap_or_default();
     // --solo <name>: start with only that output shown, if it exists.
     let solo = opts
         .solo_monitor
@@ -561,6 +574,8 @@ fn build_ui(app: &Application, opts: &Opts) {
         // may open on a non-focused output, where it never gains focus.
         active: false,
         solo,
+        badge_cmd,
+        badges,
         drag: None,
         anim_ws: HashMap::new(),
         anim_col: HashMap::new(),
@@ -1893,7 +1908,17 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
                 .get(&wsv.ws.id)
                 .copied()
                 .unwrap_or((wl.x, wl.y));
-            draw_workspace(cr, wl, ax - wl.x, ay - wl.y, wsv, false, state.sel_win, t);
+            draw_workspace(
+                cr,
+                wl,
+                ax - wl.x,
+                ay - wl.y,
+                wsv,
+                false,
+                state.sel_win,
+                badge_for(state, wsv),
+                t,
+            );
         }
         if let Some(wl) = layout
             .workspaces
@@ -1905,13 +1930,23 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
             set_rgba(cr, 0.0, 0.0, 0.0, 0.35);
             rounded_rect(cr, fx + 3.0, fy + 6.0, wl.w, wl.h, 10.0);
             let _ = cr.fill();
-            draw_workspace(cr, wl, fx - wl.x, fy - wl.y, wsv, true, state.sel_win, t);
+            draw_workspace(
+                cr,
+                wl,
+                fx - wl.x,
+                fy - wl.y,
+                wsv,
+                true,
+                state.sel_win,
+                badge_for(state, wsv),
+                t,
+            );
         }
     } else if let Some((d, src_ws, dcol)) = dragged_col {
         // Column drag: cards stay put; columns reflow; the grabbed column floats.
         for wl in &layout.workspaces {
             let wsv = &outputs[wl.o].workspaces[wl.wi];
-            draw_workspace_chrome(cr, wl, 0.0, 0.0, wsv, false, t);
+            draw_workspace_chrome(cr, wl, 0.0, 0.0, wsv, false, badge_for(state, wsv), t);
             for col in &wl.cols {
                 if wsv.ws.id == src_ws && col.col == dcol {
                     continue;
@@ -1963,7 +1998,17 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         for wl in &layout.workspaces {
             let wsv = &outputs[wl.o].workspaces[wl.wi];
             let ws_selected = sel == Some((wl.o, wl.wi));
-            draw_workspace(cr, wl, 0.0, 0.0, wsv, ws_selected, state.sel_win, t);
+            draw_workspace(
+                cr,
+                wl,
+                0.0,
+                0.0,
+                wsv,
+                ws_selected,
+                state.sel_win,
+                badge_for(state, wsv),
+                t,
+            );
         }
     }
 
@@ -2143,6 +2188,13 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
 
 /// Draw a workspace card's chrome (background, border, header, separator), but
 /// not its columns. `(dx, dy)` shifts it from its home position.
+/// The badge to draw on `wsv`, if its name is flagged by the badge command.
+fn badge_for<'a>(state: &'a State, wsv: &WsView) -> Option<&'a badges::Badge> {
+    let name = wsv.ws.name.as_deref()?;
+    state.badges.get(&name.to_lowercase())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_workspace_chrome(
     cr: &gtk::cairo::Context,
     wl: &WsLayout,
@@ -2150,10 +2202,12 @@ fn draw_workspace_chrome(
     dy: f64,
     wsv: &WsView,
     selected: bool,
+    badge: Option<&badges::Badge>,
     t: &Theme,
 ) {
     const R: f64 = 10.0;
     let (x, y, w, h) = (wl.x + dx, wl.y + dy, wl.w, wl.h);
+    let marker = badge.map(|b| b.color.unwrap_or(t.marker));
 
     if selected {
         set(cr, t.selected_card(), 1.0);
@@ -2163,6 +2217,8 @@ fn draw_workspace_chrome(
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.fill();
 
+    // Border cascade: the groom selection, then niri's focus, else the faint
+    // default edge. Badges are shown by the pill alone — no colored border.
     if selected {
         set(cr, t.accent, 1.0);
         cr.set_line_width(2.0);
@@ -2175,6 +2231,34 @@ fn draw_workspace_chrome(
     }
     rounded_rect(cr, x, y, w, h, R);
     let _ = cr.stroke();
+
+    // Badge pill in the top-right, drawn before the header so the header text
+    // can be truncated to leave room for it.
+    let mut header_max = w - 22.0;
+    if let (Some(b), Some(m)) = (badge, marker) {
+        if !b.label.is_empty() {
+            cr.select_font_face(
+                "sans-serif",
+                gtk::cairo::FontSlant::Normal,
+                gtk::cairo::FontWeight::Bold,
+            );
+            cr.set_font_size(12.0);
+            let tw = cr.text_extents(&b.label).map(|e| e.width()).unwrap_or(0.0);
+            let pill_w = tw + 14.0;
+            let pill_h = 18.0;
+            let px = x + w - pill_w - 8.0;
+            let py = y + 5.0;
+            set(cr, m, 1.0);
+            rounded_rect(cr, px, py, pill_w, pill_h, 6.0);
+            let _ = cr.fill();
+            // Readable label color for the pill, by the marker's luminance.
+            let lum = 0.299 * m.0 + 0.587 * m.1 + 0.114 * m.2;
+            let ink = if lum > 0.6 { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) };
+            set(cr, ink, 1.0);
+            text_at(cr, px + 7.0, py + 13.0, &b.label);
+            header_max -= pill_w + 6.0;
+        }
+    }
 
     cr.select_font_face(
         "sans-serif",
@@ -2190,7 +2274,7 @@ fn draw_workspace_chrome(
         set(cr, t.text, 0.95);
     }
     let header = format!("{}   ({} win)", wsv.ws.label(), wsv.windows.len());
-    text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, w - 22.0));
+    text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, header_max));
 
     set(cr, t.text, 0.08);
     cr.set_line_width(1.0);
@@ -2251,9 +2335,10 @@ fn draw_workspace(
     wsv: &WsView,
     selected: bool,
     sel_win: usize,
+    badge: Option<&badges::Badge>,
     t: &Theme,
 ) {
-    draw_workspace_chrome(cr, wl, dx, dy, wsv, selected, t);
+    draw_workspace_chrome(cr, wl, dx, dy, wsv, selected, badge, t);
     for col in &wl.cols {
         draw_column(cr, col, dx, dy, wsv, sel_win, selected, t);
     }

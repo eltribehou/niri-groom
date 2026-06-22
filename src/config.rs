@@ -9,6 +9,13 @@ const DEFAULT_CONFIG: &str = "\
 // niri-groom configuration.
 // Managed by the app (the theme picker writes here), but you can add comments.
 theme \"catppuccin-mocha\"
+
+// Optionally flag workspaces with a colored badge from an external command.
+// The command prints one tab-separated line per workspace to mark:
+//   <workspace-name>\\t<label>\\t[#rrggbb]
+// The label (e.g. a bookmark key) shows in a pill; the color is optional and
+// falls back to the theme's marker color. I use this for my niri bookmarks:
+// workspace-badges command=\"~/.config/niri/scripts/niri-groom-badges.sh\"
 ";
 
 fn config_path() -> Option<PathBuf> {
@@ -34,6 +41,22 @@ pub fn load_theme() -> Option<String> {
     doc.get("theme")
         .and_then(|n| n.entries().first())
         .and_then(|e| e.value().as_string())
+        .map(str::to_string)
+}
+
+/// Read the configured `workspace-badges command="..."`, if present. This is
+/// the generic hook for marking workspaces (my niri bookmarks are one use): the
+/// app runs the command and badges the workspaces it names. Returns `None` when
+/// unset, so the feature is simply off.
+pub fn load_badge_command() -> Option<String> {
+    let path = config_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let doc: KdlDocument = text.parse().ok()?;
+    let node = doc.get("workspace-badges")?;
+    // Prefer the `command=` property; accept a bare positional argument too.
+    node.get("command")
+        .or_else(|| node.get(0))
+        .and_then(|v| v.as_string())
         .map(str::to_string)
 }
 
