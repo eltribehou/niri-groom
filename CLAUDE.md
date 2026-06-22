@@ -16,7 +16,7 @@ workspace or a single window from the keyboard with no confirmation.
   output is drawn full-height (a configured y-offset like `HDMI-A-1 position y=360`
   is intentionally *not* reproduced — it'd just waste vertical space). Falls back to
   a synthetic row if positions are missing.
-- Draws each output's workspaces (stacked, labelled by name + window count), and
+- Draws each output's workspaces (stacked, labelled by name), and
   the windows inside each workspace laid out by their real scrolling-layout position
   (`layout.pos_in_scrolling_layout` → column, row).
 - Hides unnamed empty workspaces. niri keeps a permanent trailing empty workspace

@@ -2273,7 +2273,7 @@ fn draw_workspace_chrome(
     } else {
         set(cr, t.text, 0.95);
     }
-    let header = format!("{}   ({} win)", wsv.ws.label(), wsv.windows.len());
+    let header = wsv.ws.label();
     text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, header_max));
 
     set(cr, t.text, 0.08);
