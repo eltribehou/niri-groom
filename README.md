@@ -45,6 +45,9 @@ onto another workspace/monitor. Neighbours slide to open a gap as you drag.
 - `--toggle` — a second launch of the same instance closes the overlay, so one
   keybind opens and closes it, e.g.
   `niri-groom --toggle --solo HDMI-A-1 --open-on-monitor eDP-1 --app-id niri-groom-map`.
+- `--focus` — move niri's focus onto the overlay's output at launch, so it grabs
+  the keyboard and is navigable even when opened on another monitor (pairs with
+  `--open-on-monitor`).
 
 ## Themes
 

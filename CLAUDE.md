@@ -125,6 +125,11 @@ workspaces don't offset them.
   `build_ui` calls `app.quit()`. Note the *first* launch must carry `--toggle`,
   since it's the primary's opts that decide — using the same bind both presses
   guarantees that.)
+- `--focus` — move niri's focus onto the overlay's output at launch (via
+  `niri msg action focus-monitor`), so the exclusive-keyboard surface grabs the
+  keyboard and is navigable even when opened on a non-focused output. Mainly
+  useful with `--open-on-monitor`, since otherwise the overlay opens on the
+  already-focused output.
 
 Args are parsed by `parse_args()` before the app is built, and the app is run
 with `run_with_args` passing only argv[0] so `GApplication` doesn't try to parse

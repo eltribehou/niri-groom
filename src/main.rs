@@ -423,6 +423,9 @@ struct Opts {
     /// `--toggle`: a second launch of the same instance closes it instead of
     /// re-presenting, so one keybind opens and closes the overlay.
     toggle: bool,
+    /// `--focus`: move niri's focus onto the overlay's output at launch, so the
+    /// exclusive-keyboard surface grabs the keyboard even when opened elsewhere.
+    focus: bool,
 }
 
 fn parse_args() -> Opts {
@@ -431,6 +434,7 @@ fn parse_args() -> Opts {
     let mut solo_monitor = None;
     let mut output = None;
     let mut toggle = false;
+    let mut focus = false;
     let mut i = 1;
     while i < argv.len() {
         let arg = argv[i].clone();
@@ -440,6 +444,8 @@ fn parse_args() -> Opts {
         };
         if key == "--toggle" {
             toggle = true;
+        } else if key == "--focus" {
+            focus = true;
         } else if matches!(key, "--app-id" | "--solo" | "--open-on-monitor") {
             let val = if inline.is_some() {
                 inline
@@ -465,6 +471,7 @@ fn parse_args() -> Opts {
         output,
         namespace,
         toggle,
+        focus,
     }
 }
 
@@ -740,14 +747,23 @@ fn build_ui(app: &Application, opts: &Opts) {
     window.set_child(Some(&area));
     window.present();
 
-    // Capture the real focus state once the surface has settled: if the overlay
-    // opened on a non-focused output it never fires an is-active change, so the
-    // selection would otherwise stay shown. (Ongoing changes use the notify above.)
+    // Once the surface has settled: optionally move niri's focus onto the
+    // overlay's output (--focus), then capture the real focus state. The overlay
+    // can open on a non-focused output where it never gains focus, and is-active
+    // only fires on changes — so without this the selection state would be wrong.
+    // (Ongoing changes use the notify above.)
     {
         let state = state.clone();
         let area = area.clone();
         let window = window.clone();
+        let app = app.clone();
+        let want_focus = opts.focus;
         glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+            if want_focus {
+                if let Some(out) = overlay_output(&app) {
+                    let _ = niri::focus_monitor(&out);
+                }
+            }
             state.borrow_mut().active = window.is_active();
             area.queue_draw();
         });

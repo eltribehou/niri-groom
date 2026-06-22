@@ -200,6 +200,12 @@ pub fn focus_window(id: u64) -> Result<(), String> {
     action(&["focus-window", "--id", &id.to_string()])
 }
 
+/// Focus a monitor by output name. Used to move niri's focus onto the overlay's
+/// output so its exclusive-keyboard layer surface can grab the keyboard.
+pub fn focus_monitor(output: &str) -> Result<(), String> {
+    action(&["focus-monitor", output])
+}
+
 /// Rename the *focused* workspace. An empty name unsets it (so niri reclaims an
 /// emptied workspace). I focus the target workspace before calling this, since
 /// `set-workspace-name`'s `--workspace` reference can't disambiguate unnamed
