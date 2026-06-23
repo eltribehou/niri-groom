@@ -90,6 +90,17 @@ the `DrawingArea`):
 - **Grab a column** (a window/column body) → move the column: reorder it within
   its workspace, or drop it on another workspace / monitor.
 
+A plain **click** (a press that doesn't pass the drag threshold) selects what's
+under the cursor exactly like `hjkl`: clicking a window selects that window (and
+its workspace), clicking a workspace header or empty card area selects the
+workspace. Selection happens on press in `drag_begin` via `hit_select()`, so it
+applies whether or not the press turns into a drag. A **second click on the
+already-selected** item (i.e. click to select, then click again — or just a
+double-click) **focuses** it, exactly like `Enter`: `drag_begin` records
+`Drag::was_selected` (the target was the visible selection at press time) and a
+release without a drag calls `activate_selection()`, the helper shared with the
+`Enter` key handler.
+
 `compute_layout()` produces the positioned boxes shared by rendering and pointer
 hit-testing. While a drag is in progress the model refresh is **frozen** (so the
 grabbed geometry stays put), neighbours **reflow** to open a gap at the drop slot
@@ -307,3 +318,7 @@ harmless — GTK probes for Vulkan and falls back to the GL/cairo renderer.
 - Committing directly in this repo is fine — I don't need to ask first. Keep commits
   focused, with a concise imperative subject. (New files must still be `git add`ed
   before a `nix` invocation will see them.)
+- I run the **cargo release binary** at `./target/release/niri-groom`, not the debug
+  build. So after implementing a change, **always finish by running
+  `cargo build --release`** (inside `nix develop`) to refresh it — otherwise I won't
+  see the change.

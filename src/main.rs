@@ -195,6 +195,10 @@ struct Drag {
     /// True once the pointer has moved past the start threshold.
     active: bool,
     target: Option<DropTarget>,
+    /// True if the grabbed item was already the selection at press time. A
+    /// release without a drag then focuses it (click the highlighted item again
+    /// to activate it, like `Enter`).
+    was_selected: bool,
 }
 
 struct State {
@@ -666,26 +670,38 @@ fn build_ui(app: &Application, opts: &Opts) {
         drag_gesture.connect_drag_begin(move |_g, x, y| {
             let w = area.width() as f64;
             let h = area.height() as f64;
-            let hit = {
-                let s = state.borrow();
-                if s.editing.is_some() || s.picker.is_some() {
-                    None
-                } else {
-                    let layout = compute_layout(&s.model, w, h, s.solo);
-                    hit_workspace_header(&layout, &s.model, x, y)
-                        .or_else(|| hit_column(&layout, &s.model, x, y))
-                }
-            };
+            let mut s = state.borrow_mut();
+            if s.editing.is_some() || s.picker.is_some() {
+                return;
+            }
+            let layout = compute_layout(&s.model, w, h, s.solo);
+            // A press selects whatever is under the cursor, exactly like hjkl —
+            // a window if one was clicked, otherwise the workspace.
+            let sel = hit_select(&layout, &s.model, x, y);
+            // Was this exact target already the (visible) selection? If so, a
+            // release without a drag will focus it (a second click activates).
+            let was_selected =
+                s.active && sel == Some((s.sel_nav, s.sel_win));
+            if let Some((nav, win)) = sel {
+                s.sel_nav = nav;
+                s.sel_win = win;
+            }
+            // A header or column body also arms a potential drag.
+            let hit = hit_workspace_header(&layout, &s.model, x, y)
+                .or_else(|| hit_column(&layout, &s.model, x, y));
             if let Some((kind, rect)) = hit {
-                state.borrow_mut().drag = Some(Drag {
+                s.drag = Some(Drag {
                     kind,
                     grab: (x - rect.0, y - rect.1),
                     start: (x, y),
                     cursor: (x, y),
                     active: false,
                     target: None,
+                    was_selected,
                 });
             }
+            drop(s);
+            area.queue_draw();
         });
     }
     {
@@ -727,15 +743,27 @@ fn build_ui(app: &Application, opts: &Opts) {
     {
         let state = state.clone();
         let area = area.clone();
+        let app = app.clone();
         drag_gesture.connect_drag_end(move |_g, _ox, _oy| {
             let outcome = {
                 let s = state.borrow();
                 s.drag
                     .as_ref()
-                    .map(|d| (d.active, d.kind.clone(), d.target))
+                    .map(|d| (d.active, d.kind.clone(), d.target, d.was_selected))
             };
             match outcome {
-                Some((true, kind, Some(target))) => apply_drop(&state, &kind, target),
+                Some((true, kind, Some(target), _)) => apply_drop(&state, &kind, target),
+                // Released without dragging, on an item that was already
+                // selected → focus it, like pressing Enter.
+                Some((false, _, _, true)) => {
+                    {
+                        let mut s = state.borrow_mut();
+                        s.drag = None;
+                        s.anim_ws.clear();
+                        s.anim_col.clear();
+                    }
+                    activate_selection(&state, &app);
+                }
                 _ => {
                     let mut s = state.borrow_mut();
                     s.drag = None;
@@ -950,6 +978,40 @@ fn overlay_output(app: &Application) -> Option<String> {
     monitor.connector().map(|s| s.to_string())
 }
 
+/// Focus the selected window (or the workspace if it's empty) in niri, and
+/// dismiss the overlay when the target is on the overlay's own monitor (there it
+/// covers what you're switching to). On another monitor the overlay stays as a
+/// passive map. Shared by `Enter` and a second click on the selected window.
+/// Returns true to request a redraw (false means the app is quitting).
+fn activate_selection(state: &Rc<RefCell<State>>, app: &Application) -> bool {
+    let (win_id, ws_id, target_output) = {
+        let s = state.borrow();
+        (
+            s.selected_win_id(),
+            s.selected_ws_id(),
+            s.sel_ws().and_then(|v| v.ws.output.clone()),
+        )
+    };
+    if let Some(id) = win_id {
+        let _ = niri::focus_window(id);
+    } else if let Some(id) = ws_id {
+        let _ = niri::focus_workspace_by_id(id);
+    }
+    let same_monitor = match (overlay_output(app), target_output) {
+        (Some(overlay), Some(target)) => overlay == target,
+        // Unknown monitor → behave as before (dismiss).
+        _ => true,
+    };
+    if same_monitor {
+        app.quit();
+        false
+    } else {
+        // Keep the overlay; losing focus flips `is_active` and hides the
+        // selection, so it reads as a passive map.
+        true
+    }
+}
+
 /// Returns true if the key changed something and a redraw is wanted.
 fn handle_key(
     keyval: &gdk::Key,
@@ -1024,34 +1086,7 @@ fn handle_key(
         // to it. Only dismiss the overlay if the target is on the overlay's own
         // monitor — otherwise the overlay stays as a map on its screen while you
         // work on the other one.
-        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => {
-            let (win_id, ws_id, target_output) = {
-                let s = state.borrow();
-                (
-                    s.selected_win_id(),
-                    s.selected_ws_id(),
-                    s.sel_ws().and_then(|v| v.ws.output.clone()),
-                )
-            };
-            if let Some(id) = win_id {
-                let _ = niri::focus_window(id);
-            } else if let Some(id) = ws_id {
-                let _ = niri::focus_workspace_by_id(id);
-            }
-            let same_monitor = match (overlay_output(app), target_output) {
-                (Some(overlay), Some(target)) => overlay == target,
-                // Unknown monitor → behave as before (dismiss).
-                _ => true,
-            };
-            if same_monitor {
-                app.quit();
-                false
-            } else {
-                // Keep the overlay; losing focus flips `is_active` and hides the
-                // selection, so it reads as a passive map.
-                true
-            }
-        }
+        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app),
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
@@ -1491,6 +1526,32 @@ fn output_under_x(layout: &Layout, x: f64) -> Option<usize> {
             da.total_cmp(&db)
         })
         .map(|o| o.o)
+}
+
+/// If (x,y) is on a workspace card, return the selection it implies as
+/// `(nav index, window index)` — the same `(sel_nav, sel_win)` hjkl would set.
+/// A click on a specific window selects that window; a click anywhere else on
+/// the card selects the workspace (window index 0).
+fn hit_select(layout: &Layout, model: &Model, x: f64, y: f64) -> Option<(usize, usize)> {
+    for wl in &layout.workspaces {
+        if x < wl.x || x > wl.x + wl.w || y < wl.y || y > wl.y + wl.h {
+            continue;
+        }
+        let nav = model
+            .nav
+            .iter()
+            .position(|&(o, w)| o == wl.o && w == wl.wi)?;
+        for col in &wl.cols {
+            if x >= col.x && x <= col.x + col.w && y >= col.y && y <= col.y + col.h {
+                let rows = col.win_lin.len().max(1);
+                let rh = col.h / rows as f64;
+                let r = (((y - col.y) / rh) as usize).min(col.win_lin.len().saturating_sub(1));
+                return Some((nav, col.win_lin[r]));
+            }
+        }
+        return Some((nav, 0));
+    }
+    None
 }
 
 /// If (x,y) is on a workspace header, return the workspace drag and its rect.
