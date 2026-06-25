@@ -273,6 +273,24 @@ impl State {
             .unwrap_or(0)
     }
 
+    /// Nav index and window index matching niri's current focus. Falls back to
+    /// the first workspace and first window when nothing is focused.
+    fn focused_nav_and_win(&self) -> (usize, usize) {
+        let nav = self.focused_nav();
+        let win = self
+            .model
+            .nav
+            .get(nav)
+            .and_then(|&(o, w)| {
+                self.model.outputs[o].workspaces[w]
+                    .windows
+                    .iter()
+                    .position(|win| win.is_focused)
+            })
+            .unwrap_or(0);
+        (nav, win)
+    }
+
     /// Output index of the current selection.
     fn sel_output(&self) -> usize {
         self.model
@@ -588,15 +606,25 @@ fn build_ui(app: &Application, opts: &Opts) {
     // Start the selection on the solo'd output (if any), else where focus is.
     {
         let mut s = state.borrow_mut();
-        s.sel_nav = match solo {
-            Some(o) => s
-                .model
-                .nav
-                .iter()
-                .position(|&(oo, _)| oo == o)
-                .unwrap_or_else(|| s.focused_nav()),
-            None => s.focused_nav(),
-        };
+        let (focused_nav, focused_win) = s.focused_nav_and_win();
+        match solo {
+            Some(o) => {
+                s.sel_nav = s
+                    .model
+                    .nav
+                    .iter()
+                    .position(|&(oo, _)| oo == o)
+                    .unwrap_or(focused_nav);
+                // Only carry the focused window when the solo output matches.
+                if s.model.nav.get(s.sel_nav).map(|&(oo, _)| oo) == Some(o) {
+                    s.sel_win = focused_win;
+                }
+            }
+            None => {
+                s.sel_nav = focused_nav;
+                s.sel_win = focused_win;
+            }
+        }
     }
 
     let window = ApplicationWindow::builder()
@@ -777,12 +805,21 @@ fn build_ui(app: &Application, opts: &Opts) {
     area.add_controller(drag_gesture);
 
     // Track keyboard focus so the groom selection can hide when the overlay is
-    // left running unfocused (e.g. as a map on a second monitor).
+    // left running unfocused (e.g. as a map on a second monitor). On gaining
+    // focus the selection snaps to niri's current focus so the user is always
+    // dropped onto the workspace/window they were last looking at.
     {
         let state = state.clone();
         let area = area.clone();
         window.connect_is_active_notify(move |win| {
-            state.borrow_mut().active = win.is_active();
+            let is_active = win.is_active();
+            let mut s = state.borrow_mut();
+            s.active = is_active;
+            if is_active {
+                let (nav, win_idx) = s.focused_nav_and_win();
+                s.sel_nav = nav;
+                s.sel_win = win_idx;
+            }
             area.queue_draw();
         });
     }
