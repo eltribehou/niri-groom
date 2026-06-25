@@ -220,6 +220,10 @@ struct State {
     /// it's left running as a map on another monitor), the groom selection is
     /// hidden so only niri's own focus highlight remains.
     active: bool,
+    /// When the overlay last lost keyboard focus. Used to distinguish a genuine
+    /// user-driven focus switch (inactive for seconds) from a transient dip
+    /// caused by our own niri actions (inactive for < 150 ms).
+    became_inactive_at: Option<std::time::Instant>,
     /// When `Some(o)`, "solo" mode: only output `o` is shown, full-width.
     solo: Option<usize>,
     /// Optional command that supplies per-workspace badges (e.g. my niri
@@ -595,6 +599,7 @@ fn build_ui(app: &Application, opts: &Opts) {
         // Corrected from the real focus state just after present() — the overlay
         // may open on a non-focused output, where it never gains focus.
         active: false,
+        became_inactive_at: None,
         solo,
         badge_cmd,
         badges,
@@ -816,9 +821,24 @@ fn build_ui(app: &Application, opts: &Opts) {
             let mut s = state.borrow_mut();
             s.active = is_active;
             if is_active {
-                let (nav, win_idx) = s.focused_nav_and_win();
-                s.sel_nav = nav;
-                s.sel_win = win_idx;
+                // Snap the selection to niri's current focus only when this is a
+                // genuine user-driven focus switch. Our own niri actions (e.g.
+                // move_selected_ws calling `focus-monitor`) cause the overlay to
+                // lose and then regain focus in < 150 ms; a real switch from another
+                // monitor leaves it inactive for much longer. Skip the snap for
+                // short blips to avoid clobbering the selection mid-action.
+                let was_inactive_long = s
+                    .became_inactive_at
+                    .map(|t| t.elapsed().as_millis() > 400)
+                    .unwrap_or(true);
+                if was_inactive_long {
+                    let (nav, win_idx) = s.focused_nav_and_win();
+                    s.sel_nav = nav;
+                    s.sel_win = win_idx;
+                }
+                s.became_inactive_at = None;
+            } else {
+                s.became_inactive_at = Some(std::time::Instant::now());
             }
             area.queue_draw();
         });
