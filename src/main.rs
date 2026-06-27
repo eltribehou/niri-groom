@@ -1188,6 +1188,44 @@ fn handle_key(
             refresh(state);
             true
         }
+        // 1–9: jump to the workspace with that niri index on the current output.
+        (Some(c), _) if ('1'..='9').contains(&c) => {
+            let digit = (c as u8 - b'0') as i64;
+            let mut s = state.borrow_mut();
+            let cur_o = s.sel_output();
+            if let Some(pos) = s.model.nav.iter().position(|&(o, w)| {
+                o == cur_o && s.model.outputs[o].workspaces[w].ws.idx == digit
+            }) {
+                s.sel_nav = pos;
+                s.sel_win = 0;
+                true
+            } else {
+                false
+            }
+        }
+        // < / >: jump to the first / last workspace of the current output.
+        (Some('<'), _) => {
+            let mut s = state.borrow_mut();
+            let cur_o = s.sel_output();
+            if let Some(pos) = s.model.nav.iter().position(|&(o, _)| o == cur_o) {
+                s.sel_nav = pos;
+                s.sel_win = 0;
+                true
+            } else {
+                false
+            }
+        }
+        (Some('>'), _) => {
+            let mut s = state.borrow_mut();
+            let cur_o = s.sel_output();
+            if let Some(pos) = s.model.nav.iter().rposition(|&(o, _)| o == cur_o) {
+                s.sel_nav = pos;
+                s.sel_win = 0;
+                true
+            } else {
+                false
+            }
+        }
         _ => false,
     }
 }
@@ -2568,7 +2606,7 @@ fn key_legend() -> [(&'static str, &'static str); 3] {
     [
         (
             "Workspace",
-            "j/k prev/next · Shift+J/K reorder · Shift+H/L to screen · r rename · w kill",
+            "j/k prev/next · 1-9 jump to index · <> first/last · Shift+J/K reorder · Shift+H/L to screen · r rename · w kill",
         ),
         ("Window", "h/l prev/next · Ctrl+H/L move column · x kill"),
         (

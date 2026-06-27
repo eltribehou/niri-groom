@@ -38,6 +38,8 @@ workspace or a single window from the keyboard with no confirmation.
 
 | Key            | Action                                   |
 | -------------- | ---------------------------------------- |
+| `1`–`9`        | Jump to the workspace with that niri index on the current output |
+| `<` / `>`      | Jump to the first / last workspace of the current output |
 | `j` / `Down`   | Select next workspace; crosses to the next screen at the boundary |
 | `k` / `Up`     | Select previous workspace; crosses to the previous screen at the boundary |
 | `Shift+J`      | Move the selected workspace down within its monitor |
