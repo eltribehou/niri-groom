@@ -11,6 +11,7 @@ use crate::theme::{Rgb, Theme};
 use gtk4 as gtk;
 
 use gtk::gdk;
+use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, DrawingArea, EventControllerKey};
@@ -922,6 +923,43 @@ fn build_ui(app: &Application, opts: &Opts) {
             glib::ControlFlow::Continue
         });
     }
+
+    // Refresh when an external tool touches the trigger file. niri emits no
+    // event when the badge/mark store changes (it's just a file), so the
+    // mark-toggle command touches this path to refresh every running overlay at
+    // once instead of waiting for the 2s fallback. A generic poke — anything
+    // that mutates the badge source can touch it.
+    {
+        let path = refresh_trigger_path();
+        // Create the file so there's something to monitor from the start.
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path);
+        let file = gio::File::for_path(&path);
+        if let Ok(monitor) = file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+            let state = state.clone();
+            let area = area.clone();
+            monitor.connect_changed(move |_, _, _, _| {
+                refresh(&state);
+                area.queue_draw();
+            });
+            // Keep the monitor alive for the whole process; dropping it stops
+            // the watch.
+            std::mem::forget(monitor);
+        }
+    }
+}
+
+/// Path an external tool can `touch` to ask every running overlay to refresh
+/// immediately. A file-only change to the badge/mark store emits no niri event,
+/// so this is the generic poke for it. A well-known location the app owns.
+fn refresh_trigger_path() -> std::path::PathBuf {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    dir.join("niri-groom-refresh")
 }
 
 /// Snapshot the compositor's focused window and workspace, so an operation that

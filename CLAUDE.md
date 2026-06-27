@@ -218,6 +218,16 @@ name (marks are keyed by name, like badges). So `m` on an *unnamed* workspace
 opens the rename field first (`mark_after_rename`), and applies the mark once a
 non-empty name is committed; cancelling the rename clears the pending mark.
 
+Because a mark change is just a file write, niri emits no event for it, so a
+toggle from a niri bind would otherwise only show up on the slow 2s fallback
+poll. To make it instant I watch a **refresh-trigger file**
+(`$XDG_RUNTIME_DIR/niri-groom-refresh`, `refresh_trigger_path`) with a
+`gio::FileMonitor`: touching it refreshes every running overlay at once. The
+mark command touches it after writing. It's a generic poke — anything that
+mutates the badge source can touch it — and it's why a background map updates
+immediately when I mark from the keyboard. (The in-overlay `m` key also
+refreshes synchronously, so it doesn't depend on the poke.)
+
 `Enter` focuses the *selected window* (`focus-window`), falling back to the
 workspace when it's empty. It only quits the overlay when the target is on the
 overlay's own monitor (found via `overlay_output` — the connector of the
