@@ -6,6 +6,11 @@
 //! I use it to surface my niri workspace bookmarks (a thin script greps my
 //! `bookmarks.kdl`), but the app itself knows nothing about bookmarks — anyone
 //! can point the command at whatever notion of "marked workspace" they have.
+//!
+//! [`toggle`] is the write half of the same idea: a second command flips a
+//! workspace's marked state in its own store, which the read command above then
+//! reports back as a pill. The app still owns no state — it only invokes the
+//! command on the selected workspace.
 
 use crate::theme::{self, Rgb};
 use std::collections::HashMap;
@@ -44,4 +49,17 @@ pub fn load(command: &str) -> HashMap<String, Badge> {
         map.insert(name.to_lowercase(), Badge { label, color });
     }
     map
+}
+
+/// Run the mark-toggle command (through `sh -c`) to flip `workspace`'s marked
+/// state. The workspace name is passed in the `NIRI_GROOM_WORKSPACE` environment
+/// variable; the command decides what "marked" means and where it's stored. The
+/// call blocks until the command exits so a following refresh sees the new
+/// state. Any failure is ignored — marks are decorative.
+pub fn toggle(command: &str, workspace: &str) {
+    let _ = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .env("NIRI_GROOM_WORKSPACE", workspace)
+        .status();
 }

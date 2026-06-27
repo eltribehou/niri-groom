@@ -230,6 +230,13 @@ struct State {
     /// bookmarks), and its last-fetched result keyed by lowercased name.
     badge_cmd: Option<String>,
     badges: HashMap<String, badges::Badge>,
+    /// Optional command that toggles a workspace's marked state (the `m` key).
+    /// The marks themselves come back through `badge_cmd`, so the app keeps no
+    /// state of its own.
+    mark_cmd: Option<String>,
+    /// Set when `m` is pressed on an unnamed workspace: it opens the rename
+    /// field, and the mark is applied once a name is committed.
+    mark_after_rename: bool,
     /// In-progress pointer drag (freezes refresh so the layout stays put).
     drag: Option<Drag>,
     /// Eased on-screen top-left per workspace id and per column, so neighbours
@@ -582,6 +589,7 @@ fn build_ui(app: &Application, opts: &Opts) {
         .unwrap_or(0);
     let badge_cmd = config::load_badge_command();
     let badges = badge_cmd.as_deref().map(badges::load).unwrap_or_default();
+    let mark_cmd = config::load_mark_toggle_command();
     // --solo <name>: start with only that output shown, if it exists.
     let solo = opts
         .solo_monitor
@@ -603,6 +611,8 @@ fn build_ui(app: &Application, opts: &Opts) {
         solo,
         badge_cmd,
         badges,
+        mark_cmd,
+        mark_after_rename: false,
         drag: None,
         anim_ws: HashMap::new(),
         anim_col: HashMap::new(),
@@ -937,21 +947,35 @@ fn restore_focus((prev_win, prev_ws): (Option<u64>, Option<u64>)) {
 /// Commit the rename: focus the target workspace, set (or unset, if empty) its
 /// name, then restore the prior focus and close the field.
 fn commit_rename(state: &Rc<RefCell<State>>) {
-    let (target, name) = {
+    let (target, name, mark_after, mark_cmd) = {
         let s = state.borrow();
         (
             s.selected_ws_id(),
             s.editing.as_ref().map(|e| e.text()).unwrap_or_default(),
+            s.mark_after_rename,
+            s.mark_cmd.clone(),
         )
     };
+    let trimmed = name.trim();
     if let Some(id) = target {
         let focus = capture_focus();
         if niri::focus_workspace_by_id(id).is_ok() {
-            let _ = niri::rename_focused_workspace(name.trim());
+            let _ = niri::rename_focused_workspace(trimmed);
         }
         restore_focus(focus);
     }
-    state.borrow_mut().editing = None;
+    // If `m` opened this rename on an unnamed workspace, mark it now that it has
+    // a name (skip if it was left empty — nothing to key the mark on).
+    if mark_after && !trimmed.is_empty() {
+        if let Some(cmd) = mark_cmd {
+            badges::toggle(&cmd, trimmed);
+        }
+    }
+    {
+        let mut s = state.borrow_mut();
+        s.editing = None;
+        s.mark_after_rename = false;
+    }
     refresh(state);
 }
 
@@ -966,7 +990,9 @@ fn handle_edit_key(keyval: &gdk::Key, mods: gdk::ModifierType, state: &Rc<RefCel
     // Cancel (Esc / C-g) and commit (Enter) end the edit and re-enter `state`,
     // so handle them before borrowing the buffer.
     if matches!(*keyval, gdk::Key::Escape) || (ctrl && lc == Some('g')) {
-        state.borrow_mut().editing = None;
+        let mut s = state.borrow_mut();
+        s.editing = None;
+        s.mark_after_rename = false;
         return true;
     }
     if matches!(*keyval, gdk::Key::Return | gdk::Key::KP_Enter) {
@@ -1120,6 +1146,33 @@ fn handle_key(
                 .map(|ws| ws.ws.name.clone().unwrap_or_default());
             if let Some(name) = name {
                 state.borrow_mut().editing = Some(Edit::new(&name));
+            }
+            true
+        }
+        // Toggle the selected workspace's marked state via the configured
+        // command. A mark needs a stable name, so on an unnamed workspace this
+        // opens the rename field and marks it once the name is committed.
+        (Some('m'), _) => {
+            let (cmd, name) = {
+                let s = state.borrow();
+                (
+                    s.mark_cmd.clone(),
+                    s.sel_ws()
+                        .and_then(|v| v.ws.name.clone())
+                        .filter(|n| !n.is_empty()),
+                )
+            };
+            let Some(cmd) = cmd else { return false };
+            match name {
+                Some(name) => {
+                    badges::toggle(&cmd, &name);
+                    refresh(state);
+                }
+                None => {
+                    let mut s = state.borrow_mut();
+                    s.mark_after_rename = true;
+                    s.editing = Some(Edit::new(""));
+                }
             }
             true
         }
@@ -2606,7 +2659,7 @@ fn key_legend() -> [(&'static str, &'static str); 3] {
     [
         (
             "Workspace",
-            "j/k prev/next · 1-9 jump to index · <> first/last · Shift+J/K reorder · Shift+H/L to screen · r rename · w kill",
+            "j/k prev/next · 1-9 jump to index · <> first/last · Shift+J/K reorder · Shift+H/L to screen · r rename · m mark · w kill",
         ),
         ("Window", "h/l prev/next · Ctrl+H/L move column · x kill"),
         (

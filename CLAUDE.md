@@ -54,6 +54,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `s`            | Solo the selected monitor (toggle): show only it, full-width; `Tab` then swaps which one |
 | `Enter`        | Focus the selected window (or workspace if empty); dismiss the overlay only if the target is on the overlay's own monitor |
 | `r`            | Rename the selected workspace (inline text field) |
+| `m`            | Toggle the selected workspace's marked state (runs the `workspace-mark-toggle` command; opens rename first if the workspace is unnamed) |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
 | `?`            | Toggle the key legend panel (hidden by default; a small `? keys` hint shows) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
@@ -198,6 +199,24 @@ bookmarks live as `<key> { focus-workspace "<name>"; }` binds in
 `~/.config/niri/bookmarks.kdl`, and a one-line `niri-groom-badges.sh` greps that
 into the tab-separated format. niri doesn't expose configured binds over IPC, so
 that knowledge can only come from such a command.
+
+## Workspace marks
+
+`m` toggles a workspace's *marked* state — the write half of the badge
+mechanism. The app keeps no mark state of its own: a config key
+`workspace-mark-toggle command="<cmd>"` names a command I run (via `sh -c`) with
+the selected workspace name in `$NIRI_GROOM_WORKSPACE`. The command owns the
+store (a file, an extra line in `bookmarks.kdl`, whatever) and flips the mark
+there; the `workspace-badges` command above reads it back, so a marked workspace
+simply shows as a pill — there's no separate rendering. Binding the *same*
+script to a niri key toggles from outside the app, so niri and the overlay share
+one source of truth and can't diverge. With no command configured, `m` is a
+no-op.
+
+A mark needs a stable identity, and the only stable handle is the workspace
+name (marks are keyed by name, like badges). So `m` on an *unnamed* workspace
+opens the rename field first (`mark_after_rename`), and applies the mark once a
+non-empty name is committed; cancelling the rename clears the pending mark.
 
 `Enter` focuses the *selected window* (`focus-window`), falling back to the
 workspace when it's empty. It only quits the overlay when the target is on the

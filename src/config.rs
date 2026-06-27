@@ -16,6 +16,12 @@ theme \"catppuccin-mocha\"
 // The label (e.g. a bookmark key) shows in a pill; the color is optional and
 // falls back to the theme's marker color. I use this for my niri bookmarks:
 // workspace-badges command=\"~/.config/niri/scripts/niri-groom-badges.sh\"
+
+// Optionally toggle a workspace's \"marked\" state with the `m` key. The command
+// receives the selected workspace name in $NIRI_GROOM_WORKSPACE and owns the
+// store (a file, etc.); have the badges command above read it back so the mark
+// shows as a pill. Bind the same script to a niri key to toggle from outside.
+// workspace-mark-toggle command=\"~/.config/niri/scripts/niri-groom-mark.sh\"
 ";
 
 fn config_path() -> Option<PathBuf> {
@@ -53,6 +59,22 @@ pub fn load_badge_command() -> Option<String> {
     let text = std::fs::read_to_string(&path).ok()?;
     let doc: KdlDocument = text.parse().ok()?;
     let node = doc.get("workspace-badges")?;
+    // Prefer the `command=` property; accept a bare positional argument too.
+    node.get("command")
+        .or_else(|| node.get(0))
+        .and_then(|v| v.as_string())
+        .map(str::to_string)
+}
+
+/// Read the configured `workspace-mark-toggle command="..."`, if present. This
+/// is the write half of the badge mechanism: the app runs the command on the
+/// selected workspace to flip its marked state, while the store itself lives in
+/// the command's own file. Returns `None` when unset, so the `m` key is a no-op.
+pub fn load_mark_toggle_command() -> Option<String> {
+    let path = config_path()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let doc: KdlDocument = text.parse().ok()?;
+    let node = doc.get("workspace-mark-toggle")?;
     // Prefer the `command=` property; accept a bare positional argument too.
     node.get("command")
         .or_else(|| node.get(0))
