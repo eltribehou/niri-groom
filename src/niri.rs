@@ -206,22 +206,60 @@ pub fn focus_monitor(output: &str) -> Result<(), String> {
     action(&["focus-monitor", output])
 }
 
-/// Rename the *focused* workspace. An empty name unsets it (so niri reclaims an
-/// emptied workspace). I focus the target workspace before calling this, since
-/// `set-workspace-name`'s `--workspace` reference can't disambiguate unnamed
-/// workspaces across monitors.
-pub fn rename_focused_workspace(name: &str) -> Result<(), String> {
+/// Rename the workspace with stable `id` to `name` (an empty `name` unsets it),
+/// **without moving focus**. I target it through `set-workspace-name`'s
+/// `--workspace` reference instead of focusing it:
+///   - a named workspace is referenced by its current name;
+///   - an unnamed one is referenced by its index, which niri resolves on the
+///     focused output — so I focus its monitor first (restoring the previous
+///     one) only when it sits on a different output.
+///
+/// niri drops a `set-workspace-name` whose new name equals the current one
+/// case-insensitively, so for a named workspace I force a case-only edit
+/// (`Foo` -> `foo`) through a throwaway intermediate name (a zero-width-space
+/// prefix), referencing the workspace by name at each step.
+pub fn rename_workspace_by_id(id: u64, name: &str) -> Result<(), String> {
+    let wss = fetch_workspaces()?;
+    let ws = wss
+        .iter()
+        .find(|w| w.id == id)
+        .ok_or_else(|| format!("workspace {id} no longer exists"))?;
+    let current = ws.name.as_deref().filter(|n| !n.is_empty());
+
     if name.is_empty() {
-        return action(&["unset-workspace-name"]);
+        // Only a named workspace has a name to drop; an unnamed one already has none.
+        return match current {
+            Some(c) => action(&["unset-workspace-name", c]),
+            None => Ok(()),
+        };
     }
-    // niri ignores `set-workspace-name` when the new name matches the current
-    // one case-insensitively, so a case-only edit (`Foo` -> `foo`) would be
-    // dropped. Force it through a throwaway intermediate name that differs
-    // either way (a zero-width space prefix). The workspace stays named the
-    // whole time, so niri never reclaims it mid-rename.
-    let scratch = format!("\u{200b}{name}");
-    let _ = action(&["set-workspace-name", &scratch]);
-    action(&["set-workspace-name", name])
+
+    if let Some(current) = current {
+        let scratch = format!("\u{200b}{name}");
+        let _ = action(&["set-workspace-name", "--workspace", current, &scratch]);
+        return action(&["set-workspace-name", "--workspace", &scratch, name]);
+    }
+
+    // Unnamed: `--workspace <index>` resolves on the focused output, so focus
+    // the target's monitor first when it differs, then put focus back.
+    let idx = ws.idx.to_string();
+    let focused_output = wss.iter().find(|w| w.is_focused).and_then(|w| w.output.clone());
+    let cross = match (&ws.output, &focused_output) {
+        (Some(t), Some(f)) => t != f,
+        _ => false,
+    };
+    if cross {
+        if let Some(t) = &ws.output {
+            action(&["focus-monitor", t])?;
+        }
+    }
+    let res = action(&["set-workspace-name", "--workspace", &idx, name]);
+    if cross {
+        if let Some(f) = &focused_output {
+            let _ = action(&["focus-monitor", f]);
+        }
+    }
+    res
 }
 
 /// Move the column containing `window_id` left or right within its workspace.

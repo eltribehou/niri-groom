@@ -70,12 +70,17 @@ readline-style (Emacs) bindings: `C-a`/`C-e` start/end, `C-b`/`C-f` char,
 plus arrows/Home/End/Delete. There's no separate manual-refresh key — the 800ms
 timer keeps the map current.
 
-niri's `set-workspace-name` is a **case-insensitive no-op** — setting `foo` over
-`Foo` does nothing, so a case-only edit would silently fail. `rename_focused_workspace`
-works around this by first setting a throwaway intermediate name (a zero-width-space
-prefix) and then the real one, which forces the change through. I avoid the simpler
-unset-then-set because unsetting an empty workspace's name can let niri reclaim it
-mid-rename.
+`rename_workspace_by_id` renames **without moving focus**, by targeting the
+workspace through `set-workspace-name`'s `--workspace` reference rather than
+focusing it. A named workspace is referenced by its current name; an unnamed one
+by its index — which niri resolves on the *focused* output, so I focus its
+monitor first (and restore the previous one) only when it's on a different
+output. niri's `set-workspace-name` is a **case-insensitive no-op** — setting
+`foo` over `Foo` does nothing, so a case-only edit would silently fail. For a
+named workspace I force the change through a throwaway intermediate name (a
+zero-width-space prefix), referencing the workspace by name at each step. This
+matters for the `m`-on-unnamed flow: naming the workspace must not switch focus
+to it (which focusing-to-rename used to do).
 
 `s` toggles **solo mode** (`State::solo: Option<usize>`): only the selected
 output is shown, laid out full-width (`compute_layout` takes a `solo` arg and

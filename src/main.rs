@@ -982,8 +982,9 @@ fn restore_focus((prev_win, prev_ws): (Option<u64>, Option<u64>)) {
     }
 }
 
-/// Commit the rename: focus the target workspace, set (or unset, if empty) its
-/// name, then restore the prior focus and close the field.
+/// Commit the rename: set (or unset, if empty) the selected workspace's name
+/// without moving focus, then close the field. When the rename was opened by `m`
+/// on an unnamed workspace, mark it once it has a name.
 fn commit_rename(state: &Rc<RefCell<State>>) {
     let (target, name, mark_after, mark_cmd) = {
         let s = state.borrow();
@@ -996,11 +997,10 @@ fn commit_rename(state: &Rc<RefCell<State>>) {
     };
     let trimmed = name.trim();
     if let Some(id) = target {
-        let focus = capture_focus();
-        if niri::focus_workspace_by_id(id).is_ok() {
-            let _ = niri::rename_focused_workspace(trimmed);
-        }
-        restore_focus(focus);
+        // Names the workspace by reference without moving focus, so committing a
+        // rename (or naming an unnamed workspace via the mark flow) leaves the
+        // user where they were.
+        let _ = niri::rename_workspace_by_id(id, trimmed);
     }
     // If `m` opened this rename on an unnamed workspace, mark it now that it has
     // a name (skip if it was left empty — nothing to key the mark on).
