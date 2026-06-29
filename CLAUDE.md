@@ -288,10 +288,16 @@ otherwise deadlocks input until the app is killed).
 - **kdl** (crate 6) to read/write the KDL config, preserving comments on save.
 - **async-channel** to hand event-stream pings from the reader thread to the GTK
   main loop, and **libc** for the child's `PR_SET_PDEATHSIG`.
+- **pangocairo** (crate 0.22) to lay out and paint the text.
 
-Text is drawn with cairo's toy font API (`select_font_face` / `show_text`) and
-truncated with an ellipsis to fit — deliberately no pango dependency, the labels are
-short.
+Text is drawn through Pango (`layout_for` builds a `pango::Layout`, `text_at`
+paints it with `pangocairo`), truncated with an ellipsis to fit. Pango falls back
+across font families per glyph, so an emoji in a window title is rendered — in
+color — by the system emoji font even though the body text is plain sans-serif.
+The `Font` struct carries just a pixel size and a bold flag (the only variation
+the labels need); `text_at` positions text by its baseline, matching where the
+old cairo `show_text` drew it, and the current cairo source color is used for
+plain glyphs while color-emoji glyphs keep their own colors.
 
 ## Layout of the code
 

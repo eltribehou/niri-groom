@@ -13,6 +13,7 @@ use gtk4 as gtk;
 use gtk::gdk;
 use gtk::gio;
 use gtk::glib;
+use gtk::pango;
 use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, DrawingArea, EventControllerKey};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -1513,16 +1514,52 @@ fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius
     cr.close_path();
 }
 
-/// Truncate `text` with an ellipsis so it fits within `max_w`.
-fn fit_text(cr: &gtk::cairo::Context, text: &str, max_w: f64) -> String {
+/// A font to draw with: the sans-serif family at `size` pixels, bold or not.
+/// Text is rendered through Pango, which falls back across families per glyph —
+/// so an emoji in a window title is drawn (in color) by the system emoji font
+/// even though the body text is plain sans-serif.
+#[derive(Clone, Copy)]
+struct Font {
+    size: f64,
+    bold: bool,
+}
+
+impl Font {
+    fn new(size: f64) -> Self {
+        Font { size, bold: false }
+    }
+    fn bold(size: f64) -> Self {
+        Font { size, bold: true }
+    }
+}
+
+/// Build a Pango layout for `text` in `font`, ready to measure or draw.
+fn layout_for(cr: &gtk::cairo::Context, font: Font, text: &str) -> pango::Layout {
+    let layout = pangocairo::functions::create_layout(cr);
+    let mut desc = pango::FontDescription::new();
+    desc.set_family("sans-serif");
+    desc.set_weight(if font.bold {
+        pango::Weight::Bold
+    } else {
+        pango::Weight::Normal
+    });
+    desc.set_absolute_size(font.size * pango::SCALE as f64);
+    layout.set_font_description(Some(&desc));
+    layout.set_text(text);
+    layout
+}
+
+/// The pixel width `text` occupies in `font`.
+fn text_width(cr: &gtk::cairo::Context, font: Font, text: &str) -> f64 {
+    layout_for(cr, font, text).pixel_size().0 as f64
+}
+
+/// Truncate `text` with an ellipsis so it fits within `max_w` in `font`.
+fn fit_text(cr: &gtk::cairo::Context, font: Font, text: &str, max_w: f64) -> String {
     if max_w <= 0.0 {
         return String::new();
     }
-    let fits = |s: &str| {
-        cr.text_extents(s)
-            .map(|e| e.width() <= max_w)
-            .unwrap_or(true)
-    };
+    let fits = |s: &str| text_width(cr, font, s) <= max_w;
     if fits(text) {
         return text.to_string();
     }
@@ -1538,9 +1575,14 @@ fn fit_text(cr: &gtk::cairo::Context, text: &str, max_w: f64) -> String {
     "…".to_string()
 }
 
-fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, s: &str) {
-    cr.move_to(x, y);
-    let _ = cr.show_text(s);
+/// Draw `text` in `font` with the text baseline at `y` (matching cairo's
+/// `show_text` positioning). The current source color is used for plain glyphs;
+/// color-emoji glyphs carry their own colors.
+fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, font: Font, s: &str) {
+    let layout = layout_for(cr, font, s);
+    let baseline = layout.baseline() as f64 / pango::SCALE as f64;
+    cr.move_to(x, y - baseline);
+    pangocairo::functions::show_layout(cr, &layout);
 }
 
 /// A column's on-screen slot within a workspace card.
@@ -2079,24 +2121,16 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     cr.rectangle(0.0, 0.0, w, h);
     let _ = cr.fill();
 
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
-
     if let Some(err) = &state.error {
         set(cr, t.urgent, 1.0);
-        cr.set_font_size(16.0);
-        text_at(cr, PAD, PAD + 16.0, &format!("niri error: {err}"));
+        text_at(cr, PAD, PAD + 16.0, Font::new(16.0), &format!("niri error: {err}"));
         return;
     }
 
     let outputs = &state.model.outputs;
     if outputs.is_empty() {
         set(cr, t.subtext, 1.0);
-        cr.set_font_size(16.0);
-        text_at(cr, PAD, PAD + 16.0, "no workspaces found");
+        text_at(cr, PAD, PAD + 16.0, Font::new(16.0), "no workspaces found");
         return;
     }
 
@@ -2116,18 +2150,14 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         rounded_rect(cr, ol.x, ol.y, ol.w, ol.h, 14.0);
         let _ = cr.fill();
 
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Bold,
-        );
         set(cr, t.text, 0.85);
-        cr.set_font_size(17.0);
+        let f = Font::bold(17.0);
         text_at(
             cr,
             ol.x + 12.0,
             ol.y + 21.0,
-            &fit_text(cr, &outputs[ol.o].name, ol.w - 24.0),
+            f,
+            &fit_text(cr, f, &outputs[ol.o].name, ol.w - 24.0),
         );
     }
 
@@ -2292,23 +2322,18 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit, t: &Theme)
     rounded_rect(cr, bx, by, bw, bh, 12.0);
     let _ = cr.stroke();
 
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
     set(cr, t.subtext, 1.0);
-    cr.set_font_size(12.0);
     text_at(
         cr,
         bx + 16.0,
         by + 24.0,
+        Font::new(12.0),
         "Rename workspace  (Enter: confirm · Esc: cancel · empty: unset)",
     );
 
     let text_x = bx + 16.0;
     let text_y = by + 62.0;
-    cr.set_font_size(20.0);
+    let field_font = Font::new(20.0);
 
     // Clip to the field so a long name can't spill past the border.
     let _ = cr.save();
@@ -2316,14 +2341,11 @@ fn draw_rename(cr: &gtk::cairo::Context, w: f64, h: f64, edit: &Edit, t: &Theme)
     cr.clip();
 
     set(cr, t.text, 1.0);
-    text_at(cr, text_x, text_y, &edit.text());
+    text_at(cr, text_x, text_y, field_font, &edit.text());
 
     // Caret: a thin vertical bar at the cursor's x-advance.
     let prefix: String = edit.buf[..edit.cursor].iter().collect();
-    let caret_x = text_x
-        + cr.text_extents(&prefix)
-            .map(|e| e.x_advance())
-            .unwrap_or(0.0);
+    let caret_x = text_x + text_width(cr, field_font, &prefix);
     set(cr, t.accent, 1.0);
     cr.set_line_width(1.5);
     cr.move_to(caret_x, text_y - 17.0);
@@ -2361,25 +2383,14 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     let _ = cr.stroke();
 
     // Header.
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Bold,
-    );
     set(cr, t.text, 1.0);
-    cr.set_font_size(16.0);
-    text_at(cr, bx + 16.0, by + 26.0, "Theme");
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
+    text_at(cr, bx + 16.0, by + 26.0, Font::bold(16.0), "Theme");
     set(cr, t.subtext, 1.0);
-    cr.set_font_size(11.0);
     text_at(
         cr,
         bx + 16.0,
         by + 42.0,
+        Font::new(11.0),
         "j/k select · Enter save · Esc cancel",
     );
 
@@ -2408,26 +2419,18 @@ fn draw_picker(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         }
 
         // Name.
-        if i == hi {
-            cr.select_font_face(
-                "sans-serif",
-                gtk::cairo::FontSlant::Normal,
-                gtk::cairo::FontWeight::Bold,
-            );
+        let name_font = if i == hi {
             set(cr, t.accent, 1.0);
+            Font::bold(14.0)
         } else {
-            cr.select_font_face(
-                "sans-serif",
-                gtk::cairo::FontSlant::Normal,
-                gtk::cairo::FontWeight::Normal,
-            );
             set(cr, t.text, 0.95);
-        }
-        cr.set_font_size(14.0);
+            Font::new(14.0)
+        };
         text_at(
             cr,
             bx + 16.0 + 3.0 * (ss + 4.0) + 8.0,
             ry + row_h / 2.0 + 5.0,
+            name_font,
             th.name,
         );
     }
@@ -2484,13 +2487,8 @@ fn draw_workspace_chrome(
     let mut header_max = w - 22.0;
     if let (Some(b), Some(m)) = (badge, marker) {
         if !b.label.is_empty() {
-            cr.select_font_face(
-                "sans-serif",
-                gtk::cairo::FontSlant::Normal,
-                gtk::cairo::FontWeight::Bold,
-            );
-            cr.set_font_size(12.0);
-            let tw = cr.text_extents(&b.label).map(|e| e.width()).unwrap_or(0.0);
+            let pill_font = Font::bold(12.0);
+            let tw = text_width(cr, pill_font, &b.label);
             let pill_w = tw + 14.0;
             let pill_h = 18.0;
             let px = x + w - pill_w - 8.0;
@@ -2502,17 +2500,11 @@ fn draw_workspace_chrome(
             let lum = 0.299 * m.0 + 0.587 * m.1 + 0.114 * m.2;
             let ink = if lum > 0.6 { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) };
             set(cr, ink, 1.0);
-            text_at(cr, px + 7.0, py + 13.0, &b.label);
+            text_at(cr, px + 7.0, py + 13.0, pill_font, &b.label);
             header_max -= pill_w + 6.0;
         }
     }
 
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(15.0);
     if wsv.ws.is_urgent {
         set(cr, t.urgent, 1.0);
     } else if selected {
@@ -2520,8 +2512,15 @@ fn draw_workspace_chrome(
     } else {
         set(cr, t.text, 0.95);
     }
+    let header_font = Font::bold(15.0);
     let header = wsv.ws.label();
-    text_at(cr, x + 11.0, y + 19.0, &fit_text(cr, &header, header_max));
+    text_at(
+        cr,
+        x + 11.0,
+        y + 19.0,
+        header_font,
+        &fit_text(cr, header_font, &header, header_max),
+    );
 
     set(cr, t.text, 0.08);
     cr.set_line_width(1.0);
@@ -2530,14 +2529,8 @@ fn draw_workspace_chrome(
     let _ = cr.stroke();
 
     if wsv.windows.is_empty() {
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Normal,
-        );
         set(cr, t.subtext, 0.75);
-        cr.set_font_size(12.0);
-        text_at(cr, x + 11.0, y + WS_HEADER_H + 18.0, "(empty)");
+        text_at(cr, x + 11.0, y + WS_HEADER_H + 18.0, Font::new(12.0), "(empty)");
     }
 }
 
@@ -2644,50 +2637,26 @@ fn draw_window(
 
     if h >= 46.0 {
         // app id — secondary context line (regular weight).
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Normal,
-        );
+        let id_font = Font::new(13.0);
         set(cr, t.subtext, 1.0);
-        cr.set_font_size(13.0);
         if let Some(app_id) = &win.app_id {
-            text_at(cr, tx, y + 20.0, &fit_text(cr, app_id, text_w));
+            text_at(cr, tx, y + 20.0, id_font, &fit_text(cr, id_font, app_id, text_w));
         }
 
         // title — primary, bold and larger.
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Bold,
-        );
+        let title_font = Font::bold(15.0);
         set(cr, t.text, 1.0);
-        cr.set_font_size(15.0);
-        text_at(cr, tx, y + 42.0, &fit_text(cr, &win.label(), text_w));
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Normal,
-        );
+        text_at(cr, tx, y + 42.0, title_font, &fit_text(cr, title_font, &win.label(), text_w));
     } else if h >= 20.0 {
         // Tight box: just the title, vertically centred.
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Bold,
-        );
+        let title_font = Font::bold(14.0);
         set(cr, t.text, 1.0);
-        cr.set_font_size(14.0);
         text_at(
             cr,
             tx,
             y + h / 2.0 + 5.0,
-            &fit_text(cr, &win.label(), text_w),
-        );
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Normal,
+            title_font,
+            &fit_text(cr, title_font, &win.label(), text_w),
         );
     }
 }
@@ -2709,16 +2678,11 @@ fn key_legend() -> [(&'static str, &'static str); 3] {
 
 /// A small unobtrusive hint in the bottom-right so the legend is discoverable.
 fn draw_hint(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
     set(cr, t.subtext, 0.5);
-    cr.set_font_size(12.0);
+    let f = Font::new(12.0);
     let s = "? keys";
-    let tw = cr.text_extents(s).map(|e| e.x_advance()).unwrap_or(40.0);
-    text_at(cr, w - PAD - tw, h - 7.0, s);
+    let tw = text_width(cr, f, s);
+    text_at(cr, w - PAD - tw, h - 7.0, f, s);
 }
 
 /// The key legend as a centered panel (toggled with `?`), grouped by target.
@@ -2744,61 +2708,36 @@ fn draw_help(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
     let _ = cr.stroke();
 
     // Title + close hint.
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Bold,
-    );
     set(cr, t.text, 1.0);
-    cr.set_font_size(16.0);
-    text_at(cr, bx + 18.0, by + 30.0, "Keys");
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Normal,
-    );
+    text_at(cr, bx + 18.0, by + 30.0, Font::bold(16.0), "Keys");
     set(cr, t.subtext, 0.9);
-    cr.set_font_size(12.0);
+    let close_font = Font::new(12.0);
     let close = "? or Esc to close";
-    let cw = cr.text_extents(close).map(|e| e.x_advance()).unwrap_or(0.0);
-    text_at(cr, bx + bw - 18.0 - cw, by + 30.0, close);
+    let cw = text_width(cr, close_font, close);
+    text_at(cr, bx + bw - 18.0 - cw, by + 30.0, close_font, close);
 
     // Align the action columns to the widest label.
-    cr.select_font_face(
-        "sans-serif",
-        gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(14.0);
+    let label_font = Font::bold(14.0);
+    let actions_font = Font::new(14.0);
     let label_w = rows
         .iter()
-        .map(|(label, _)| cr.text_extents(label).map(|e| e.x_advance()).unwrap_or(0.0))
+        .map(|(label, _)| text_width(cr, label_font, label))
         .fold(0.0_f64, f64::max);
     let actions_x = bx + 18.0 + label_w + 16.0;
 
     for (i, (label, actions)) in rows.iter().enumerate() {
         let y = by + 56.0 + 18.0 + i as f64 * line_h;
 
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Bold,
-        );
         set(cr, t.accent, 1.0);
-        cr.set_font_size(14.0);
-        text_at(cr, bx + 18.0, y, label);
+        text_at(cr, bx + 18.0, y, label_font, label);
 
-        cr.select_font_face(
-            "sans-serif",
-            gtk::cairo::FontSlant::Normal,
-            gtk::cairo::FontWeight::Normal,
-        );
         set(cr, t.text, 0.92);
         text_at(
             cr,
             actions_x,
             y,
-            &fit_text(cr, actions, bx + bw - 18.0 - actions_x),
+            actions_font,
+            &fit_text(cr, actions_font, actions, bx + bw - 18.0 - actions_x),
         );
     }
 }
