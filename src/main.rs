@@ -1514,10 +1514,95 @@ fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius
     cr.close_path();
 }
 
-/// A font to draw with: the sans-serif family at `size` pixels, bold or not.
-/// Text is rendered through Pango, which falls back across families per glyph —
-/// so an emoji in a window title is drawn (in color) by the system emoji font
-/// even though the body text is plain sans-serif.
+/// The family list Pango itemizes text with. Body text is `sans-serif`; for a
+/// glyph it can't cover (an emoji) Pango walks the rest of the list, where a
+/// monochrome emoji family is named before any color one. See
+/// [`force_text_presentation`] for why emoji come out monochrome.
+const FONT_FAMILIES: &str = "sans-serif, Noto Emoji, Symbola";
+
+/// Variation selector that requests the *text* (monochrome) presentation of the
+/// preceding character; its sibling `U+FE0F` requests the emoji (color) one.
+const VS_TEXT: char = '\u{FE0E}';
+const VS_EMOJI: char = '\u{FE0F}';
+
+/// Unicode `Emoji_Presentation=Yes` code point ranges (inclusive), from
+/// `emoji/emoji-data.txt`, coalesced and sorted by start. A character in one of
+/// these ranges renders as a color emoji by default unless `U+FE0E` follows it.
+#[rustfmt::skip]
+const EMOJI_PRESENTATION: &[(u32, u32)] = &[
+    (0x231A, 0x231B), (0x23E9, 0x23EC), (0x23F0, 0x23F0), (0x23F3, 0x23F3),
+    (0x25FD, 0x25FE), (0x2614, 0x2615), (0x2648, 0x2653), (0x267F, 0x267F),
+    (0x2693, 0x2693), (0x26A1, 0x26A1), (0x26AA, 0x26AB), (0x26BD, 0x26BE),
+    (0x26C4, 0x26C5), (0x26CE, 0x26CE), (0x26D4, 0x26D4), (0x26EA, 0x26EA),
+    (0x26F2, 0x26F3), (0x26F5, 0x26F5), (0x26FA, 0x26FA), (0x26FD, 0x26FD),
+    (0x2705, 0x2705), (0x270A, 0x270B), (0x2728, 0x2728), (0x274C, 0x274C),
+    (0x274E, 0x274E), (0x2753, 0x2755), (0x2757, 0x2757), (0x2795, 0x2797),
+    (0x27B0, 0x27B0), (0x27BF, 0x27BF), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
+    (0x2B55, 0x2B55), (0x1F004, 0x1F004), (0x1F0CF, 0x1F0CF), (0x1F18E, 0x1F18E),
+    (0x1F191, 0x1F19A), (0x1F1E6, 0x1F1FF), (0x1F201, 0x1F201), (0x1F21A, 0x1F21A),
+    (0x1F22F, 0x1F22F), (0x1F232, 0x1F236), (0x1F238, 0x1F23A), (0x1F250, 0x1F251),
+    (0x1F300, 0x1F320), (0x1F32D, 0x1F335), (0x1F337, 0x1F37C), (0x1F37E, 0x1F393),
+    (0x1F3A0, 0x1F3CA), (0x1F3CF, 0x1F3D3), (0x1F3E0, 0x1F3F0), (0x1F3F4, 0x1F3F4),
+    (0x1F3F8, 0x1F43E), (0x1F440, 0x1F440), (0x1F442, 0x1F4FC), (0x1F4FF, 0x1F53D),
+    (0x1F54B, 0x1F54E), (0x1F550, 0x1F567), (0x1F57A, 0x1F57A), (0x1F595, 0x1F596),
+    (0x1F5A4, 0x1F5A4), (0x1F5FB, 0x1F64F), (0x1F680, 0x1F6C5), (0x1F6CC, 0x1F6CC),
+    (0x1F6D0, 0x1F6D2), (0x1F6D5, 0x1F6D8), (0x1F6DC, 0x1F6DF), (0x1F6EB, 0x1F6EC),
+    (0x1F6F4, 0x1F6FC), (0x1F7E0, 0x1F7EB), (0x1F7F0, 0x1F7F0), (0x1F90C, 0x1F93A),
+    (0x1F93C, 0x1F945), (0x1F947, 0x1F9FF), (0x1FA70, 0x1FA7C), (0x1FA80, 0x1FA8A),
+    (0x1FA8E, 0x1FAC6), (0x1FAC8, 0x1FAC8), (0x1FACD, 0x1FADC), (0x1FADF, 0x1FAEA),
+    (0x1FAEF, 0x1FAF8),
+];
+
+/// Whether `c` defaults to color-emoji presentation.
+fn is_emoji_presentation(c: char) -> bool {
+    let cp = c as u32;
+    EMOJI_PRESENTATION
+        .binary_search_by(|&(lo, hi)| {
+            if cp < lo {
+                std::cmp::Ordering::Greater
+            } else if cp > hi {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// Rewrite `text` so emoji render monochrome instead of in color.
+///
+/// Pango picks a color emoji font for any character that defaults to emoji
+/// presentation, ignoring the requested family — so the only portable lever is
+/// the Unicode presentation selector. Appending `U+FE0E` after such a character
+/// asks for its text (monochrome) glyph, which the named monochrome emoji
+/// families then provide in the current text color. An explicit `U+FE0F` in the
+/// input (a request for color) is dropped for the same reason.
+///
+/// Most labels hold no emoji at all, so the common case returns the input
+/// untouched. Multi-character emoji (skin-tone or zero-width-joiner sequences)
+/// don't survive this — they fall back to their component glyphs — which is an
+/// accepted trade for a uniformly monochrome map.
+fn force_text_presentation(text: &str) -> std::borrow::Cow<'_, str> {
+    let touched = |c: char| c == VS_EMOJI || is_emoji_presentation(c);
+    if !text.chars().any(touched) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if c == VS_EMOJI {
+            continue;
+        }
+        out.push(c);
+        if is_emoji_presentation(c) {
+            out.push(VS_TEXT);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// A font to draw with: at `size` pixels, bold or not.
+/// Text is rendered through Pango, which falls back across families per glyph
+/// (see [`FONT_FAMILIES`]).
 #[derive(Clone, Copy)]
 struct Font {
     size: f64,
@@ -1537,7 +1622,7 @@ impl Font {
 fn layout_for(cr: &gtk::cairo::Context, font: Font, text: &str) -> pango::Layout {
     let layout = pangocairo::functions::create_layout(cr);
     let mut desc = pango::FontDescription::new();
-    desc.set_family("sans-serif");
+    desc.set_family(FONT_FAMILIES);
     desc.set_weight(if font.bold {
         pango::Weight::Bold
     } else {
@@ -1545,7 +1630,7 @@ fn layout_for(cr: &gtk::cairo::Context, font: Font, text: &str) -> pango::Layout
     });
     desc.set_absolute_size(font.size * pango::SCALE as f64);
     layout.set_font_description(Some(&desc));
-    layout.set_text(text);
+    layout.set_text(&force_text_presentation(text));
     layout
 }
 
@@ -1576,8 +1661,8 @@ fn fit_text(cr: &gtk::cairo::Context, font: Font, text: &str, max_w: f64) -> Str
 }
 
 /// Draw `text` in `font` with the text baseline at `y` (matching cairo's
-/// `show_text` positioning). The current source color is used for plain glyphs;
-/// color-emoji glyphs carry their own colors.
+/// `show_text` positioning), in the current source color — emoji included, since
+/// they are drawn as monochrome outlines (see [`force_text_presentation`]).
 fn text_at(cr: &gtk::cairo::Context, x: f64, y: f64, font: Font, s: &str) {
     let layout = layout_for(cr, font, s);
     let baseline = layout.baseline() as f64 / pango::SCALE as f64;
