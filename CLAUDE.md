@@ -298,16 +298,21 @@ carries just a pixel size and a bold flag (the only variation the labels need);
 `text_at` positions text by its baseline, matching where the old cairo
 `show_text` drew it.
 
+The font family is the bare generic `sans-serif` (`FONT_FAMILY`) — *not* a list.
+Naming extra emoji families there makes fontconfig resolve the body text to some
+other (worse-reading) face, so the emoji handling is done by presentation
+selector instead.
+
 Emoji are forced to **monochrome** so they don't clash with the themed card
 backgrounds. The lever is Unicode presentation, not the font: Pango picks a color
 emoji font for any character that defaults to emoji presentation, ignoring the
 requested family. So `force_text_presentation` appends the text-presentation
 selector `U+FE0E` after each such character (identified via the embedded
-`Emoji_Presentation` range table) and drops any explicit `U+FE0F`; the named
-monochrome emoji families (`Noto Emoji`, `Symbola`) then supply an outline glyph,
-painted in the current text color like the rest of the label. Multi-character
-emoji (skin-tone / ZWJ sequences) don't survive this and fall back to their
-component glyphs — an accepted trade for a uniformly monochrome map.
+`Emoji_Presentation` range table) and drops any explicit `U+FE0F`; fontconfig's
+own per-glyph fallback then supplies the monochrome outline, painted in the
+current text color like the rest of the label. Multi-character emoji (skin-tone /
+ZWJ sequences) don't survive this and fall back to their component glyphs — an
+accepted trade for a uniformly monochrome map.
 
 ## Layout of the code
 

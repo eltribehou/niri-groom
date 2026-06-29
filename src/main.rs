@@ -1514,11 +1514,12 @@ fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius
     cr.close_path();
 }
 
-/// The family list Pango itemizes text with. Body text is `sans-serif`; for a
-/// glyph it can't cover (an emoji) Pango walks the rest of the list, where a
-/// monochrome emoji family is named before any color one. See
-/// [`force_text_presentation`] for why emoji come out monochrome.
-const FONT_FAMILIES: &str = "sans-serif, Noto Emoji, Symbola";
+/// The font family Pango itemizes text with. It is left as the bare generic
+/// `sans-serif` (not a list): naming extra emoji families here makes fontconfig
+/// resolve the *body* text to some other face, which reads worse. Emoji that
+/// `sans-serif` can't cover fall through Pango's own per-glyph fallback, and
+/// [`force_text_presentation`] steers that fallback to a monochrome glyph.
+const FONT_FAMILY: &str = "sans-serif";
 
 /// Variation selector that requests the *text* (monochrome) presentation of the
 /// preceding character; its sibling `U+FE0F` requests the emoji (color) one.
@@ -1574,9 +1575,9 @@ fn is_emoji_presentation(c: char) -> bool {
 /// Pango picks a color emoji font for any character that defaults to emoji
 /// presentation, ignoring the requested family — so the only portable lever is
 /// the Unicode presentation selector. Appending `U+FE0E` after such a character
-/// asks for its text (monochrome) glyph, which the named monochrome emoji
-/// families then provide in the current text color. An explicit `U+FE0F` in the
-/// input (a request for color) is dropped for the same reason.
+/// asks for its text (monochrome) glyph, which fontconfig's fallback then
+/// supplies, drawn in the current text color. An explicit `U+FE0F` in the input
+/// (a request for color) is dropped for the same reason.
 ///
 /// Most labels hold no emoji at all, so the common case returns the input
 /// untouched. Multi-character emoji (skin-tone or zero-width-joiner sequences)
@@ -1622,7 +1623,7 @@ impl Font {
 fn layout_for(cr: &gtk::cairo::Context, font: Font, text: &str) -> pango::Layout {
     let layout = pangocairo::functions::create_layout(cr);
     let mut desc = pango::FontDescription::new();
-    desc.set_family(FONT_FAMILIES);
+    desc.set_family(FONT_FAMILY);
     desc.set_weight(if font.bold {
         pango::Weight::Bold
     } else {
