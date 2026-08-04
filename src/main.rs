@@ -2747,19 +2747,64 @@ fn draw_window(
     }
 }
 
-/// The grouped key legend shown when `?` is pressed.
-fn key_legend() -> [(&'static str, &'static str); 3] {
+/// The grouped key legend shown when `?` is pressed. Each group holds its
+/// actions one per entry, so they can be spread over as many lines as the panel
+/// needs.
+fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
     [
         (
             "Workspace",
-            "j/k prev/next · 1-9 jump to index · <> first/last · Shift+J/K reorder · Shift+H/L to screen · r rename · m mark · w kill",
+            &[
+                "j/k or Down/Up prev/next",
+                "1-9 jump to index",
+                "<> first/last",
+                "Shift+J/K reorder",
+                "Shift+H/L to screen",
+                "r rename",
+                "m mark",
+                "w kill",
+            ],
         ),
-        ("Window", "h/l prev/next · Ctrl+H/L move column · x kill"),
+        (
+            "Window",
+            &[
+                "h/l or Left/Right prev/next",
+                "Ctrl+H/L move column",
+                "x kill",
+            ],
+        ),
         (
             "General",
-            "Tab switch screen · s solo screen · Enter focus · t theme · q quit",
+            &[
+                "Tab/Shift+Tab switch screen",
+                "s solo screen",
+                "Enter focus",
+                "t theme",
+                "? keys",
+                "q/Esc quit",
+            ],
         ),
     ]
+}
+
+/// Pack `items` into lines joined by " · ", each line at most `max_w` wide.
+/// An item wider than `max_w` gets a line of its own.
+fn wrap_items(cr: &gtk::cairo::Context, font: Font, items: &[&str], max_w: f64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for item in items {
+        match lines.last_mut() {
+            Some(line) => {
+                let candidate = format!("{line} · {item}");
+                if text_width(cr, font, &candidate) <= max_w {
+                    *line = candidate;
+                } else {
+                    lines.push((*item).to_string());
+                }
+            }
+            None => lines.push((*item).to_string()),
+        }
+    }
+    lines
 }
 
 /// A small unobtrusive hint in the bottom-right so the legend is discoverable.
@@ -2780,9 +2825,26 @@ fn draw_help(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
     let _ = cr.fill();
 
     let line_h = 26.0;
-    let bw = 720.0_f64.min(w - 2.0 * PAD);
-    let bh = 56.0 + rows.len() as f64 * line_h + 6.0;
+    let group_gap = 8.0;
+    let bw = 760.0_f64.min(w - 2.0 * PAD);
     let bx = (w - bw) / 2.0;
+
+    // Align the action columns to the widest label, then wrap each group's
+    // actions into the width that's left.
+    let label_font = Font::bold(14.0);
+    let actions_font = Font::new(14.0);
+    let label_w = rows
+        .iter()
+        .map(|(label, _)| text_width(cr, label_font, label))
+        .fold(0.0_f64, f64::max);
+    let actions_x = bx + 18.0 + label_w + 16.0;
+    let wrapped: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(_, items)| wrap_items(cr, actions_font, items, bx + bw - 18.0 - actions_x))
+        .collect();
+
+    let total_lines: f64 = wrapped.iter().map(|l| l.len() as f64).sum();
+    let bh = 56.0 + total_lines * line_h + (rows.len() - 1) as f64 * group_gap + 6.0;
     let by = (h - bh) / 2.0;
 
     set(cr, t.surface, 1.0);
@@ -2802,28 +2864,16 @@ fn draw_help(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
     let cw = text_width(cr, close_font, close);
     text_at(cr, bx + bw - 18.0 - cw, by + 30.0, close_font, close);
 
-    // Align the action columns to the widest label.
-    let label_font = Font::bold(14.0);
-    let actions_font = Font::new(14.0);
-    let label_w = rows
-        .iter()
-        .map(|(label, _)| text_width(cr, label_font, label))
-        .fold(0.0_f64, f64::max);
-    let actions_x = bx + 18.0 + label_w + 16.0;
-
-    for (i, (label, actions)) in rows.iter().enumerate() {
-        let y = by + 56.0 + 18.0 + i as f64 * line_h;
-
+    let mut y = by + 56.0 + 18.0;
+    for ((label, _), lines) in rows.iter().zip(&wrapped) {
         set(cr, t.accent, 1.0);
         text_at(cr, bx + 18.0, y, label_font, label);
 
         set(cr, t.text, 0.92);
-        text_at(
-            cr,
-            actions_x,
-            y,
-            actions_font,
-            &fit_text(cr, actions_font, actions, bx + bw - 18.0 - actions_x),
-        );
+        for line in lines {
+            text_at(cr, actions_x, y, actions_font, line);
+            y += line_h;
+        }
+        y += group_gap;
     }
 }
