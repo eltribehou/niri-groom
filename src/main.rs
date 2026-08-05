@@ -807,7 +807,7 @@ fn build_ui(app: &Application, opts: &Opts) {
                         s.anim_ws.clear();
                         s.anim_col.clear();
                     }
-                    activate_selection(&state, &app);
+                    activate_selection(&state, &app, false);
                 }
                 _ => {
                     let mut s = state.borrow_mut();
@@ -1100,12 +1100,18 @@ fn overlay_output(app: &Application) -> Option<String> {
     monitor.connector().map(|s| s.to_string())
 }
 
-/// Focus the selected window (or the workspace if it's empty) in niri, and
-/// dismiss the overlay when the target is on the overlay's own monitor (there it
-/// covers what you're switching to). On another monitor the overlay stays as a
-/// passive map. Shared by `Enter` and a second click on the selected window.
+/// Focus the selected window (or the workspace if it's empty) in niri. With
+/// `keep_overlay` false (`Enter`, a second click), this dismisses the overlay
+/// when the target is on the overlay's own monitor (there it covers what
+/// you're switching to) and otherwise leaves it as a passive map. With
+/// `keep_overlay` true (`Shift+Enter`), the overlay stays open and keyboard-
+/// focused regardless of which monitor the target is on: focusing the target
+/// can steal niri's output focus (`focus_workspace_by_id` does a
+/// `focus-monitor` first when the workspace is on another output), so I
+/// refocus the overlay's own monitor right after to hand the keyboard grab
+/// back.
 /// Returns true to request a redraw (false means the app is quitting).
-fn activate_selection(state: &Rc<RefCell<State>>, app: &Application) -> bool {
+fn activate_selection(state: &Rc<RefCell<State>>, app: &Application, keep_overlay: bool) -> bool {
     let (win_id, ws_id, target_output) = {
         let s = state.borrow();
         (
@@ -1118,6 +1124,13 @@ fn activate_selection(state: &Rc<RefCell<State>>, app: &Application) -> bool {
         let _ = niri::focus_window(id);
     } else if let Some(id) = ws_id {
         let _ = niri::focus_workspace_by_id(id);
+    }
+    if keep_overlay {
+        if let Some(output) = overlay_output(app) {
+            let _ = niri::focus_monitor(&output);
+        }
+        refresh(state);
+        return true;
     }
     let same_monitor = match (overlay_output(app), target_output) {
         (Some(overlay), Some(target)) => overlay == target,
@@ -1235,7 +1248,12 @@ fn handle_key(
         // to it. Only dismiss the overlay if the target is on the overlay's own
         // monitor — otherwise the overlay stays as a map on its screen while you
         // work on the other one.
-        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app),
+        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter)
+            if mods.contains(gdk::ModifierType::SHIFT_MASK) =>
+        {
+            activate_selection(state, app, true)
+        }
+        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app, false),
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
@@ -2779,6 +2797,7 @@ fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
                 "Tab/Shift+Tab switch screen",
                 "s solo screen",
                 "Enter focus",
+                "Shift+Enter focus, stay open",
                 "t theme",
                 "? keys",
                 "q/Esc quit",

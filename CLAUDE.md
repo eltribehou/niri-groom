@@ -53,6 +53,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `s`            | Solo the selected monitor (toggle): show only it, full-width; `Tab` then swaps which one |
 | `Enter`        | Focus the selected window (or workspace if empty); dismiss the overlay only if the target is on the overlay's own monitor |
+| `Shift+Enter`  | Same, but the overlay stays open and keyboard-focused         |
 | `r`            | Rename the selected workspace (inline text field) |
 | `m`            | Toggle the selected workspace's marked state (runs the `workspace-mark-toggle` command; opens rename first if the workspace is unnamed) |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
@@ -239,6 +240,15 @@ overlay's own monitor (found via `overlay_output` — the connector of the
 `Monitor` under the window's surface): there the overlay covers the thing you're
 switching to, so it must close; on another monitor it stays put as a map and you
 keep working on the other screen (losing focus hides its selection).
+
+`Shift+Enter` runs the same focus call but never quits: it always hands the
+keyboard grab straight back to the overlay's own monitor afterwards
+(`focus_monitor`), which is needed because focusing a workspace on another
+output moves niri's output focus there first (`focus_workspace_by_id` does its
+own `focus-monitor` before `focus-workspace`). Re-focusing the overlay's
+monitor undoes that theft — or is a no-op if the target was already there —
+so the map keeps browsing while the picked window or workspace becomes niri's
+real focus underneath.
 
 The overlay opens on whichever workspace is currently focused. Killing a
 workspace closes all its windows and then runs `unset-workspace-name` on it, so
