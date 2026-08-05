@@ -1101,10 +1101,10 @@ fn overlay_output(app: &Application) -> Option<String> {
 }
 
 /// Focus the selected window (or the workspace if it's empty) in niri. With
-/// `keep_overlay` false (`Enter`, a second click), this dismisses the overlay
-/// when the target is on the overlay's own monitor (there it covers what
-/// you're switching to) and otherwise leaves it as a passive map. With
-/// `keep_overlay` true (`Shift+Enter`), the overlay stays open and keyboard-
+/// `keep_overlay` false (`Shift+Enter`, a second click), this dismisses the
+/// overlay when the target is on the overlay's own monitor (there it covers
+/// what you're switching to) and otherwise leaves it as a passive map. With
+/// `keep_overlay` true (plain `Enter`), the overlay stays open and keyboard-
 /// focused regardless of which monitor the target is on: focusing the target
 /// can steal niri's output focus (`focus_workspace_by_id` does a
 /// `focus-monitor` first when the workspace is on another output), so I
@@ -1245,15 +1245,15 @@ fn handle_key(
             true
         }
         // Focus the selected window (or the workspace if it's empty), then jump
-        // to it. Only dismiss the overlay if the target is on the overlay's own
-        // monitor — otherwise the overlay stays as a map on its screen while you
-        // work on the other one.
+        // to it. `Shift+Enter` only dismisses the overlay if the target is on
+        // the overlay's own monitor — otherwise it stays as a map on its screen
+        // while you work on the other one. Plain `Enter` never dismisses.
         (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter)
             if mods.contains(gdk::ModifierType::SHIFT_MASK) =>
         {
-            activate_selection(state, app, true)
+            activate_selection(state, app, false)
         }
-        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app, false),
+        (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app, true),
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.
         (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
@@ -2796,8 +2796,8 @@ fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
             &[
                 "Tab/Shift+Tab switch screen",
                 "s solo screen",
-                "Enter focus",
-                "Shift+Enter focus, stay open",
+                "Enter focus, stay open",
+                "Shift+Enter focus",
                 "t theme",
                 "? keys",
                 "q/Esc quit",
