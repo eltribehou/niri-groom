@@ -20,7 +20,7 @@ pub enum DragKind {
 }
 
 /// Where a drag would land if dropped now.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DropTarget {
     /// Insert the workspace into output `o` at slot `idx` (0-based among the
     /// other workspaces there).
@@ -274,4 +274,243 @@ pub fn column_reflow(
         }
     }
     targets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::compute_layout;
+    use crate::model::fixtures::Snapshot;
+
+    const W: f64 = 1600.0;
+    const H: f64 = 900.0;
+
+    /// eDP-1 holds "code" (two columns) and "web"; HDMI-A-1 holds "chat".
+    fn two_outputs() -> Model {
+        Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .window(11, 2, 1)
+            .workspace(2, 2, Some("web"))
+            .window(20, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(3, 1, Some("chat"))
+            .window(30, 1, 1)
+            .build()
+    }
+
+    fn card<'a>(layout: &'a Layout, o: usize, wi: usize) -> &'a WsLayout {
+        layout
+            .workspaces
+            .iter()
+            .find(|wl| wl.o == o && wl.wi == wi)
+            .expect("no such workspace card")
+    }
+
+    fn centre(wl: &WsLayout) -> (f64, f64) {
+        (wl.x + wl.w / 2.0, wl.y + wl.h / 2.0)
+    }
+
+    #[test]
+    fn clicking_a_window_selects_that_window_and_its_workspace() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let col = &card(&layout, 0, 0).cols[1];
+        let hit = hit_select(&layout, &model, col.x + col.w / 2.0, col.y + col.h / 2.0);
+        // Second column of the first workspace: nav index 0, window index 1.
+        assert_eq!(hit, Some((0, 1)));
+    }
+
+    #[test]
+    fn clicking_a_card_away_from_its_windows_selects_the_workspace() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let wl = card(&layout, 0, 1);
+        // The header strip sits above every column.
+        let hit = hit_select(&layout, &model, wl.x + 4.0, wl.y + 2.0);
+        assert_eq!(hit, Some((1, 0)));
+    }
+
+    #[test]
+    fn clicking_outside_every_card_selects_nothing() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        assert_eq!(hit_select(&layout, &model, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn the_cursor_belongs_to_the_output_it_sits_over() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let second = layout.outputs.iter().find(|o| o.o == 1).unwrap();
+        assert_eq!(output_under_x(&layout, second.x + 10.0), Some(1));
+    }
+
+    #[test]
+    fn a_cursor_past_every_output_belongs_to_the_nearest() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        assert_eq!(output_under_x(&layout, W * 4.0), Some(1));
+        assert_eq!(output_under_x(&layout, -W), Some(0));
+    }
+
+    #[test]
+    fn grabbing_a_header_drags_that_workspace() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let wl = card(&layout, 0, 1);
+        let hit = hit_workspace_header(&layout, &model, wl.x + 5.0, wl.y + 2.0);
+        assert!(matches!(hit, Some((DragKind::Workspace { id: 2 }, _))));
+    }
+
+    #[test]
+    fn the_body_of_a_card_is_not_a_header_grab() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let (x, y) = centre(card(&layout, 0, 0));
+        assert!(hit_workspace_header(&layout, &model, x, y).is_none());
+    }
+
+    #[test]
+    fn grabbing_a_column_carries_its_workspace_and_niri_column_index() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let col = &card(&layout, 0, 0).cols[1];
+        let hit = hit_column(&layout, &model, col.x + col.w / 2.0, col.y + col.h / 2.0);
+        let Some((DragKind::Column { ws_id, col, win_id }, _)) = hit else {
+            panic!("expected a column drag");
+        };
+        assert_eq!((ws_id, col, win_id), (1, 2, 11));
+    }
+
+    #[test]
+    fn dropping_above_the_first_workspace_inserts_at_the_top() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let first = card(&layout, 0, 0);
+        // Dragging "web" (id 2) up over the top half of "code".
+        let target = workspace_drop_target(&layout, &model, 2, (first.x + 5.0, first.y + 1.0));
+        assert_eq!(target, Some(DropTarget::Workspace { o: 0, idx: 0 }));
+    }
+
+    #[test]
+    fn dropping_below_every_workspace_inserts_at_the_bottom() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let last = card(&layout, 0, 1);
+        // Dragging "code" (id 1) down past "web", the only other card here.
+        let target = workspace_drop_target(&layout, &model, 1, (last.x + 5.0, last.y + last.h));
+        assert_eq!(target, Some(DropTarget::Workspace { o: 0, idx: 1 }));
+    }
+
+    #[test]
+    fn a_workspace_dragged_onto_another_output_drops_there() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let (x, y) = centre(card(&layout, 1, 0));
+        let target = workspace_drop_target(&layout, &model, 1, (x, y));
+        assert!(matches!(
+            target,
+            Some(DropTarget::Workspace { o: 1, idx: _ })
+        ));
+    }
+
+    #[test]
+    fn a_workspace_does_not_count_itself_when_finding_its_drop_slot() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let last = card(&layout, 0, 1);
+        let below = (last.x + 5.0, last.y + last.h);
+        // eDP-1 shows two cards. Dragging one of them leaves a single other, so
+        // the slot past the end is 1 — not 2.
+        assert_eq!(
+            workspace_drop_target(&layout, &model, 1, below),
+            Some(DropTarget::Workspace { o: 0, idx: 1 })
+        );
+    }
+
+    #[test]
+    fn a_column_dropped_left_of_the_others_inserts_at_the_front() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let wl = card(&layout, 0, 0);
+        let y = wl.cols[0].y + 1.0;
+        // Dragging column 2 back over the left edge of column 1.
+        let target = column_drop_target(&layout, &model, 1, 2, (wl.cols[0].x + 1.0, y));
+        assert_eq!(
+            target,
+            Some(DropTarget::Column {
+                o: 0,
+                wi: 0,
+                idx: 0
+            })
+        );
+    }
+
+    #[test]
+    fn a_column_does_not_count_itself_when_finding_its_drop_slot() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let wl = card(&layout, 0, 0);
+        let far_right = (wl.x + wl.w - 1.0, wl.cols[0].y + 1.0);
+        // The card holds two columns. Dragging one within its own workspace
+        // leaves a single other, so the slot past the end is 1 — not 2.
+        assert_eq!(
+            column_drop_target(&layout, &model, 1, 1, far_right),
+            Some(DropTarget::Column {
+                o: 0,
+                wi: 0,
+                idx: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_column_dragged_to_another_workspace_counts_every_column_there() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let wl = card(&layout, 0, 1);
+        let far_right = (wl.x + wl.w - 1.0, wl.cols[0].y + 1.0);
+        // "web" holds one column, and the dragged column comes from elsewhere,
+        // so it is not excluded: the slot past the end is 1.
+        assert_eq!(
+            column_drop_target(&layout, &model, 1, 1, far_right),
+            Some(DropTarget::Column {
+                o: 0,
+                wi: 1,
+                idx: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_column_dropped_outside_every_card_has_nowhere_to_land() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        assert_eq!(column_drop_target(&layout, &model, 1, 1, (0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn reflow_opens_a_gap_at_the_drop_slot() {
+        let model = two_outputs();
+        let layout = compute_layout(&model, W, H, None);
+        let drag = Drag {
+            kind: DragKind::Workspace { id: 2 },
+            grab: (0.0, 0.0),
+            start: (0.0, 0.0),
+            cursor: (0.0, 0.0),
+            active: true,
+            target: Some(DropTarget::Workspace { o: 0, idx: 0 }),
+            was_selected: false,
+        };
+        let targets = workspace_reflow(&layout, &model, &drag);
+        // "code" is the only other card on eDP-1; with the gap taken by the
+        // drop slot above it, it slides down one step.
+        let base = card(&layout, 0, 0).y;
+        let step = card(&layout, 0, 0).h + crate::layout::WS_GAP;
+        assert_eq!(targets.get(&1), Some(&(card(&layout, 0, 0).x, base + step)));
+        // The dragged workspace floats under the cursor, so it gets no target.
+        assert_eq!(targets.get(&2), None);
+    }
 }
