@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use std::process::Command;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Workspace {
     pub id: u64,
     pub idx: i64,
@@ -19,14 +19,14 @@ pub struct Workspace {
     pub is_urgent: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Layout {
     /// 1-based `[column, row]` of the window inside the scrolling layout.
     /// Absent for floating windows.
     pub pos_in_scrolling_layout: Option<[i64; 2]>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Window {
     pub id: u64,
     pub title: Option<String>,
@@ -85,7 +85,7 @@ impl Workspace {
 }
 
 /// An output's position and size in niri's logical coordinate space.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Logical {
     pub x: f64,
     pub y: f64,
@@ -95,7 +95,7 @@ pub struct Logical {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Output {
     pub name: String,
     /// Absent when the output is disabled/off.

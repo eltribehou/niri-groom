@@ -167,3 +167,206 @@ fn model_from(
 
     Model { outputs, nav }
 }
+
+#[cfg(test)]
+pub mod fixtures {
+    use super::*;
+
+    /// Builds a niri snapshot for tests: outputs left to right, workspaces on
+    /// the output declared before them, windows in the workspace declared
+    /// before them. Ids are given explicitly so a test can assert on them.
+    #[derive(Default)]
+    pub struct Snapshot {
+        workspaces: Vec<niri::Workspace>,
+        windows: Vec<niri::Window>,
+        outputs: Vec<niri::Output>,
+    }
+
+    impl Snapshot {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn output(mut self, name: &str, x: f64, width: f64) -> Self {
+            self.outputs.push(niri::Output {
+                name: name.to_string(),
+                logical: Some(niri::Logical {
+                    x,
+                    y: 0.0,
+                    width,
+                    height: 1080.0,
+                }),
+            });
+            self
+        }
+
+        pub fn workspace(mut self, id: u64, idx: i64, name: Option<&str>) -> Self {
+            let output = self.outputs.last().expect("declare an output first");
+            self.workspaces.push(niri::Workspace {
+                id,
+                idx,
+                name: name.map(str::to_string),
+                output: Some(output.name.clone()),
+                ..Default::default()
+            });
+            self
+        }
+
+        /// A window at `(column, row)` of the scrolling layout, in the
+        /// workspace declared last.
+        pub fn window(mut self, id: u64, column: i64, row: i64) -> Self {
+            let ws = self.workspaces.last().expect("declare a workspace first");
+            self.windows.push(niri::Window {
+                id,
+                title: Some(format!("window {id}")),
+                workspace_id: Some(ws.id),
+                layout: Some(niri::Layout {
+                    pos_in_scrolling_layout: Some([column, row]),
+                }),
+                ..Default::default()
+            });
+            self
+        }
+
+        pub fn build(self) -> Model {
+            model_from(self.workspaces, self.windows, self.outputs)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::Snapshot;
+    use super::*;
+
+    /// Two outputs: eDP-1 holds two workspaces, HDMI-A-1 holds one.
+    fn two_outputs() -> Model {
+        Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .workspace(2, 2, Some("web"))
+            .window(20, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(3, 1, Some("chat"))
+            .window(30, 1, 1)
+            .build()
+    }
+
+    #[test]
+    fn an_unnamed_empty_workspace_is_left_out_of_the_map() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .workspace(2, 2, None)
+            .build();
+        assert_eq!(model.outputs[0].workspaces.len(), 1);
+        assert_eq!(model.outputs[0].workspaces[0].ws.id, 1);
+    }
+
+    #[test]
+    fn a_named_empty_workspace_stays_on_the_map() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("scratch"))
+            .build();
+        assert_eq!(model.outputs[0].workspaces.len(), 1);
+    }
+
+    #[test]
+    fn outputs_are_ordered_by_their_logical_position() {
+        let model = Snapshot::new()
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(1, 1, Some("right"))
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(2, 1, Some("left"))
+            .build();
+        let names: Vec<&str> = model.outputs.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, ["eDP-1", "HDMI-A-1"]);
+    }
+
+    #[test]
+    fn windows_are_ordered_by_column_then_row() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(30, 2, 1)
+            .window(20, 1, 2)
+            .window(10, 1, 1)
+            .build();
+        let ids: Vec<u64> = model.outputs[0].workspaces[0]
+            .windows
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(ids, [10, 20, 30]);
+    }
+
+    #[test]
+    fn stepping_past_the_last_workspace_crosses_to_the_next_output() {
+        let model = two_outputs();
+        // nav index 1 is the last workspace of eDP-1; 2 is the first of HDMI-A-1.
+        assert_eq!(step_nav(&model.nav, 1, 1, None), Some(2));
+        assert_eq!(step_nav(&model.nav, 2, -1, None), Some(1));
+    }
+
+    #[test]
+    fn stepping_stops_at_the_ends_rather_than_wrapping() {
+        let model = two_outputs();
+        assert_eq!(step_nav(&model.nav, 0, -1, None), Some(0));
+        assert_eq!(step_nav(&model.nav, 2, 1, None), Some(2));
+    }
+
+    #[test]
+    fn solo_mode_confines_stepping_to_the_soloed_output() {
+        let model = two_outputs();
+        // From the last workspace of eDP-1, forward would cross to HDMI-A-1 —
+        // but eDP-1 is soloed, so the selection stays put.
+        assert_eq!(step_nav(&model.nav, 1, 1, Some(0)), Some(1));
+        // And from within HDMI-A-1, back stays inside HDMI-A-1.
+        assert_eq!(step_nav(&model.nav, 2, -1, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn stepping_a_selection_outside_the_soloed_output_pulls_it_back_in() {
+        let model = two_outputs();
+        // Selection sits on eDP-1 while HDMI-A-1 is soloed: the step lands on
+        // the soloed output rather than leaving the selection off-screen.
+        assert_eq!(step_nav(&model.nav, 0, 1, Some(1)), Some(2));
+    }
+
+    #[test]
+    fn there_is_nowhere_to_step_on_an_empty_map() {
+        assert_eq!(step_nav(&[], 0, 1, None), None);
+        assert_eq!(step_nav(&[(0, 0)], 0, 1, Some(9)), None);
+    }
+
+    #[test]
+    fn output_steps_land_on_the_first_workspace_of_the_next_output() {
+        let model = two_outputs();
+        assert_eq!(step_output(&model.nav, 0, 2, 1), Some((2, 1)));
+    }
+
+    #[test]
+    fn output_steps_wrap_around() {
+        let model = two_outputs();
+        // Forward from HDMI-A-1 (the last output) returns to eDP-1.
+        assert_eq!(step_output(&model.nav, 2, 2, 1), Some((0, 0)));
+        assert_eq!(step_output(&model.nav, 0, 2, -1), Some((2, 1)));
+    }
+
+    #[test]
+    fn a_single_output_has_nowhere_to_step_to() {
+        let model = two_outputs();
+        assert_eq!(step_output(&model.nav, 0, 1, 1), None);
+    }
+
+    #[test]
+    fn window_steps_clamp_inside_the_workspace() {
+        assert_eq!(step_win(3, 0, 1), 1);
+        assert_eq!(step_win(3, 2, 1), 2);
+        assert_eq!(step_win(3, 0, -1), 0);
+        assert_eq!(step_win(0, 0, 1), 0);
+    }
+}
