@@ -17,11 +17,11 @@ use crate::edit::Edit;
 use crate::emoji::force_text_presentation;
 use crate::layout::{compute_layout, ColLayout, WsLayout, PAD, WS_HEADER_H};
 use crate::model::{build_model, Model, WsView};
+use crate::opts::{derive_app_id, parse_args, Opts};
 use crate::pointer::{
     column_drop_target, column_reflow, hit_column, hit_select, hit_workspace_header,
     workspace_drop_target, workspace_reflow, Drag, DragKind, DropTarget, DRAG_THRESHOLD,
 };
-use crate::opts::{derive_app_id, parse_args, Opts};
 use crate::theme::{Rgb, Theme};
 use gtk4 as gtk;
 
@@ -400,8 +400,7 @@ fn build_ui(app: &Application, opts: &Opts) {
             let sel = hit_select(&layout, &s.model, x, y);
             // Was this exact target already the (visible) selection? If so, a
             // release without a drag will focus it (a second click activates).
-            let was_selected =
-                s.active && sel == Some((s.sel_nav, s.sel_win));
+            let was_selected = s.active && sel == Some((s.sel_nav, s.sel_win));
             if let Some((nav, win)) = sel {
                 s.sel_nav = nav;
                 s.sel_win = win;
@@ -613,7 +612,8 @@ fn build_ui(app: &Application, opts: &Opts) {
             .append(true)
             .open(&path);
         let file = gio::File::for_path(&path);
-        if let Ok(monitor) = file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+        if let Ok(monitor) = file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
             let state = state.clone();
             let area = area.clone();
             monitor.connect_changed(move |_, _, _, _| {
@@ -978,9 +978,11 @@ fn handle_key(
             let digit = (c as u8 - b'0') as i64;
             let mut s = state.borrow_mut();
             let cur_o = s.sel_output();
-            if let Some(pos) = s.model.nav.iter().position(|&(o, w)| {
-                o == cur_o && s.model.outputs[o].workspaces[w].ws.idx == digit
-            }) {
+            if let Some(pos) =
+                s.model.nav.iter().position(|&(o, w)| {
+                    o == cur_o && s.model.outputs[o].workspaces[w].ws.idx == digit
+                })
+            {
                 s.sel_nav = pos;
                 s.sel_win = 0;
                 true
@@ -1435,7 +1437,13 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
 
     if let Some(err) = &state.error {
         set(cr, t.urgent, 1.0);
-        text_at(cr, PAD, PAD + 16.0, Font::new(16.0), &format!("niri error: {err}"));
+        text_at(
+            cr,
+            PAD,
+            PAD + 16.0,
+            Font::new(16.0),
+            &format!("niri error: {err}"),
+        );
         return;
     }
 
@@ -1810,7 +1818,11 @@ fn draw_workspace_chrome(
             let _ = cr.fill();
             // Readable label color for the pill, by the marker's luminance.
             let lum = 0.299 * m.0 + 0.587 * m.1 + 0.114 * m.2;
-            let ink = if lum > 0.6 { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) };
+            let ink = if lum > 0.6 {
+                (0.0, 0.0, 0.0)
+            } else {
+                (1.0, 1.0, 1.0)
+            };
             set(cr, ink, 1.0);
             text_at(cr, px + 7.0, py + 13.0, pill_font, &b.label);
             header_max -= pill_w + 6.0;
@@ -1842,7 +1854,13 @@ fn draw_workspace_chrome(
 
     if wsv.windows.is_empty() {
         set(cr, t.subtext, 0.75);
-        text_at(cr, x + 11.0, y + WS_HEADER_H + 18.0, Font::new(12.0), "(empty)");
+        text_at(
+            cr,
+            x + 11.0,
+            y + WS_HEADER_H + 18.0,
+            Font::new(12.0),
+            "(empty)",
+        );
     }
 }
 
@@ -1952,13 +1970,25 @@ fn draw_window(
         let id_font = Font::new(13.0);
         set(cr, t.subtext, 1.0);
         if let Some(app_id) = &win.app_id {
-            text_at(cr, tx, y + 20.0, id_font, &fit_text(cr, id_font, app_id, text_w));
+            text_at(
+                cr,
+                tx,
+                y + 20.0,
+                id_font,
+                &fit_text(cr, id_font, app_id, text_w),
+            );
         }
 
         // title — primary, bold and larger.
         let title_font = Font::bold(15.0);
         set(cr, t.text, 1.0);
-        text_at(cr, tx, y + 42.0, title_font, &fit_text(cr, title_font, &win.label(), text_w));
+        text_at(
+            cr,
+            tx,
+            y + 42.0,
+            title_font,
+            &fit_text(cr, title_font, &win.label(), text_w),
+        );
     } else if h >= 20.0 {
         // Tight box: just the title, vertically centred.
         let title_font = Font::bold(14.0);

@@ -243,7 +243,10 @@ pub fn rename_workspace_by_id(id: u64, name: &str) -> Result<(), String> {
     // Unnamed: `--workspace <index>` resolves on the focused output, so focus
     // the target's monitor first when it differs, then put focus back.
     let idx = ws.idx.to_string();
-    let focused_output = wss.iter().find(|w| w.is_focused).and_then(|w| w.output.clone());
+    let focused_output = wss
+        .iter()
+        .find(|w| w.is_focused)
+        .and_then(|w| w.output.clone());
     let cross = match (&ws.output, &focused_output) {
         (Some(t), Some(f)) => t != f,
         _ => false,
