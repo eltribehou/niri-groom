@@ -19,7 +19,10 @@ jobs:
         run: nix develop --command cargo fmt --check
 
       - name: Clippy
-        run: nix develop --command cargo clippy --release -- -D warnings
+        run: nix develop --command cargo clippy --release --all-targets -- -D warnings
+
+      - name: Test
+        run: nix develop --command cargo test
 
       - name: Build
         run: nix develop --command cargo build --release
