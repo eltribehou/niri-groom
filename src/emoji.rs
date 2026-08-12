@@ -82,4 +82,3 @@ pub fn force_text_presentation(text: &str) -> std::borrow::Cow<'_, str> {
     }
     std::borrow::Cow::Owned(out)
 }
-

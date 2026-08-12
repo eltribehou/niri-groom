@@ -163,4 +163,3 @@ pub fn compute_layout(model: &Model, w: f64, h: f64, solo: Option<usize>) -> Lay
     }
     layout
 }
-

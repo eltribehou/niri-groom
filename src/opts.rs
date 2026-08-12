@@ -10,7 +10,6 @@ const APP_ID: &str = "io.iwd.niri-groom";
 /// overrides it.
 const APP_NAMESPACE: &str = "niri-groom";
 
-
 /// Parsed command-line options.
 pub struct Opts {
     /// Start in solo mode on the output with this name (if it exists).
@@ -90,4 +89,3 @@ pub fn derive_app_id(namespace: &str) -> String {
         APP_ID.to_string()
     }
 }
-

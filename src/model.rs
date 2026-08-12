@@ -108,4 +108,3 @@ pub fn build_model() -> Result<Model, String> {
 
     Ok(Model { outputs, nav })
 }
-
