@@ -18,6 +18,7 @@ whole workspace or a single window from the keyboard, instantly.
 | `C-h` / `C-l`   | **Move** the selected window's column left / right |
 | `Tab` / `S-Tab` | Jump to the next / previous **screen**       |
 | `s`             | **Solo** the selected monitor (toggle) — show only it, full-width |
+| `f`             | **Auto-show** (toggle) — niri's focus follows the selection as you navigate |
 | `Enter`         | **Focus** the selected window (closes the overlay only if it's on the overlay's monitor) |
 | `r`             | **Rename** the selected workspace (inline field, readline/Emacs keys) |
 | `t`             | Open the **theme** picker (live preview; Enter saves, Esc cancels) |

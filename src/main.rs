@@ -2,6 +2,7 @@
 //! and windows as a proportional map, and lets me kill a whole workspace (`w`)
 //! or a single window (`x`) with no confirmation.
 
+mod autoshow;
 mod badges;
 mod config;
 mod edit;
@@ -13,6 +14,7 @@ mod opts;
 mod pointer;
 mod theme;
 
+use crate::autoshow::{target_for, AutoShow, Target};
 use crate::edit::Edit;
 use crate::emoji::force_text_presentation;
 use crate::layout::{compute_layout, ColLayout, WsLayout, PAD, WS_HEADER_H};
@@ -63,6 +65,9 @@ struct State {
     became_inactive_at: Option<std::time::Instant>,
     /// When `Some(o)`, "solo" mode: only output `o` is shown, full-width.
     solo: Option<usize>,
+    /// "Auto-show" mode (`f`): while it is on, niri's focus follows the
+    /// selection, so navigating the map previews each window on its own output.
+    auto_show: AutoShow,
     /// Optional command that supplies per-workspace badges (e.g. my niri
     /// bookmarks), and its last-fetched result keyed by lowercased name.
     badge_cmd: Option<String>,
@@ -137,6 +142,24 @@ impl State {
             })
             .unwrap_or(0);
         (nav, win)
+    }
+
+    /// niri's own focus as an auto-show target: the focused window, falling back
+    /// to the focused workspace when it holds none.
+    fn focused_target(&self) -> Option<Target> {
+        let focused_win = self.model.nav.iter().find_map(|&(o, w)| {
+            self.model.outputs[o].workspaces[w]
+                .windows
+                .iter()
+                .find(|win| win.is_focused)
+                .map(|win| Target::Window(win.id))
+        });
+        focused_win.or_else(|| {
+            self.model.nav.iter().find_map(|&(o, w)| {
+                let v = &self.model.outputs[o].workspaces[w];
+                v.ws.is_focused.then_some(Target::Workspace(v.ws.id))
+            })
+        })
     }
 
     /// Output index of the current selection.
@@ -286,6 +309,7 @@ fn build_ui(app: &Application, opts: &Opts) {
         active: false,
         became_inactive_at: None,
         solo,
+        auto_show: AutoShow::default(),
         badge_cmd,
         badges,
         mark_cmd,
@@ -471,23 +495,20 @@ fn build_ui(app: &Application, opts: &Opts) {
                     .map(|d| (d.active, d.kind.clone(), d.target, d.was_selected))
             };
             match outcome {
-                Some((true, kind, Some(target), _)) => apply_drop(&state, &kind, target),
+                Some((true, kind, Some(target), _)) => apply_drop(&state, &app, &kind, target),
+                // A drag that ended on nothing droppable: just let it go.
+                Some((true, _, None, _)) => clear_drag(&state),
                 // Released without dragging, on an item that was already
                 // selected → focus it, like pressing Enter.
                 Some((false, _, _, true)) => {
-                    {
-                        let mut s = state.borrow_mut();
-                        s.drag = None;
-                        s.anim_ws.clear();
-                        s.anim_col.clear();
-                    }
+                    clear_drag(&state);
                     activate_selection(&state, &app, false);
                 }
+                // A press that only moved the selection (it was applied in
+                // drag_begin). Under auto-show niri follows it, like `j`.
                 _ => {
-                    let mut s = state.borrow_mut();
-                    s.drag = None;
-                    s.anim_ws.clear();
-                    s.anim_col.clear();
+                    clear_drag(&state);
+                    queue_auto_show(&state, &app);
                 }
             }
             area.queue_draw();
@@ -775,6 +796,62 @@ fn overlay_output(app: &Application) -> Option<String> {
     monitor.connector().map(|s| s.to_string())
 }
 
+/// Hand niri's focus back to the overlay's own output, so its exclusive-keyboard
+/// layer surface holds the grab. Any action that focuses something elsewhere (or
+/// carries a workspace to another output) moves niri's output focus away, which
+/// would take the keyboard with it.
+fn regrab_keyboard(app: &Application) {
+    if let Some(output) = overlay_output(app) {
+        let _ = niri::focus_monitor(&output);
+    }
+}
+
+/// How long the selection must sit still before auto-show focuses it. Holding a
+/// navigation key down therefore costs one focus call at the end rather than one
+/// per step, each of which spawns `niri msg` processes.
+const AUTO_SHOW_DEBOUNCE: Duration = Duration::from_millis(120);
+
+/// Offer the current selection to auto-show, arming the debounce timer when one
+/// isn't already in flight. It applies while the mode is on and the pointer holds
+/// no drag; a drag's own drop is what moves things.
+fn queue_auto_show(state: &Rc<RefCell<State>>, app: &Application) {
+    let arm = {
+        let mut s = state.borrow_mut();
+        if s.drag.is_some() {
+            return;
+        }
+        let Some(target) = target_for(s.selected_win_id(), s.selected_ws_id()) else {
+            return;
+        };
+        s.auto_show.queue(target)
+    };
+    if arm {
+        let state = state.clone();
+        let app = app.clone();
+        glib::timeout_add_local_once(AUTO_SHOW_DEBOUNCE, move || {
+            preview_selection(&state, &app);
+        });
+    }
+}
+
+/// Focus whatever auto-show has waiting, then take the keyboard grab back. The
+/// model is left to the event stream: focusing makes niri emit an event, which
+/// refreshes the map a moment later.
+fn preview_selection(state: &Rc<RefCell<State>>, app: &Application) {
+    let Some(target) = state.borrow_mut().auto_show.take_due() else {
+        return;
+    };
+    match target {
+        Target::Window(id) => {
+            let _ = niri::focus_window(id);
+        }
+        Target::Workspace(id) => {
+            let _ = niri::focus_workspace_by_id(id);
+        }
+    }
+    regrab_keyboard(app);
+}
+
 /// Focus the selected window (or the workspace if it's empty) in niri. With
 /// `keep_overlay` false (`Shift+Enter`, a second click), this dismisses the
 /// overlay when the target is on the overlay's own monitor (there it covers
@@ -800,10 +877,12 @@ fn activate_selection(state: &Rc<RefCell<State>>, app: &Application, keep_overla
     } else if let Some(id) = ws_id {
         let _ = niri::focus_workspace_by_id(id);
     }
+    // Keep auto-show's guard matching niri: this focus is one it didn't make.
+    if let Some(target) = target_for(win_id, ws_id) {
+        state.borrow_mut().auto_show.record_sent(target);
+    }
     if keep_overlay {
-        if let Some(output) = overlay_output(app) {
-            let _ = niri::focus_monitor(&output);
-        }
+        regrab_keyboard(app);
         refresh(state);
         return true;
     }
@@ -853,8 +932,8 @@ fn handle_key(
     // Ctrl+H / Ctrl+L: move the selected window's column within its workspace.
     if mods.contains(gdk::ModifierType::CONTROL_MASK) {
         match ch.map(|c| c.to_ascii_lowercase()) {
-            Some('h') => return move_selected_column(state, false),
-            Some('l') => return move_selected_column(state, true),
+            Some('h') => return move_selected_column(state, app, false),
+            Some('l') => return move_selected_column(state, app, true),
             _ => {}
         }
     }
@@ -909,6 +988,19 @@ fn handle_key(
             state.borrow_mut().picker = Some(idx);
             true
         }
+        // Toggle auto-show: while it's on, niri's focus follows the selection.
+        // Arming it focuses nothing — it seeds itself with niri's current focus,
+        // so the first navigation step is what moves focus.
+        (Some('f'), _) => {
+            let focused = state.borrow().focused_target();
+            let mut s = state.borrow_mut();
+            if s.auto_show.is_on() {
+                s.auto_show.disable();
+            } else {
+                s.auto_show.enable(focused);
+            }
+            true
+        }
         // Solo the selected monitor (toggle): show only it, full-width.
         (Some('s'), _) => {
             let mut s = state.borrow_mut();
@@ -931,20 +1023,20 @@ fn handle_key(
         (_, gdk::Key::Return) | (_, gdk::Key::KP_Enter) => activate_selection(state, app, true),
         // Workspace navigation (vertical); crosses to the adjacent screen at
         // the top/bottom boundary of an output's workspace stack.
-        (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, 1),
-        (Some('k'), _) | (_, gdk::Key::Up) => move_ws(state, -1),
+        (Some('j'), _) | (_, gdk::Key::Down) => move_ws(state, app, 1),
+        (Some('k'), _) | (_, gdk::Key::Up) => move_ws(state, app, -1),
         // Reorder the selected workspace within its monitor (Shift+J / Shift+K).
-        (Some('J'), _) => move_selected_ws(state, true),
-        (Some('K'), _) => move_selected_ws(state, false),
+        (Some('J'), _) => move_selected_ws(state, app, true),
+        (Some('K'), _) => move_selected_ws(state, app, false),
         // Window navigation (horizontal, within workspace).
-        (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, 1),
-        (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, -1),
+        (Some('l'), _) | (_, gdk::Key::Right) => move_win(state, app, 1),
+        (Some('h'), _) | (_, gdk::Key::Left) => move_win(state, app, -1),
         // Move the selected workspace to the screen left/right (Shift+H / Shift+L).
-        (Some('L'), _) => move_selected_ws_to_monitor(state, false),
-        (Some('H'), _) => move_selected_ws_to_monitor(state, true),
+        (Some('L'), _) => move_selected_ws_to_monitor(state, app, false),
+        (Some('H'), _) => move_selected_ws_to_monitor(state, app, true),
         // Jump straight to the next/previous screen (output).
-        (_, gdk::Key::Tab) => move_output(state, 1),
-        (_, gdk::Key::ISO_Left_Tab) => move_output(state, -1),
+        (_, gdk::Key::Tab) => move_output(state, app, 1),
+        (_, gdk::Key::ISO_Left_Tab) => move_output(state, app, -1),
         // Kill the selected window.
         (Some('x'), _) => {
             let id = state.borrow().selected_win_id();
@@ -976,64 +1068,74 @@ fn handle_key(
         // 1–9: jump to the workspace with that niri index on the current output.
         (Some(c), _) if ('1'..='9').contains(&c) => {
             let digit = (c as u8 - b'0') as i64;
-            let mut s = state.borrow_mut();
-            let cur_o = s.sel_output();
-            if let Some(pos) =
+            let pos = {
+                let s = state.borrow();
+                let cur_o = s.sel_output();
                 s.model.nav.iter().position(|&(o, w)| {
                     o == cur_o && s.model.outputs[o].workspaces[w].ws.idx == digit
                 })
-            {
-                s.sel_nav = pos;
-                s.sel_win = 0;
-                true
-            } else {
-                false
-            }
+            };
+            select_nav(state, app, pos)
         }
         // < / >: jump to the first / last workspace of the current output.
         (Some('<'), _) => {
-            let mut s = state.borrow_mut();
-            let cur_o = s.sel_output();
-            if let Some(pos) = s.model.nav.iter().position(|&(o, _)| o == cur_o) {
-                s.sel_nav = pos;
-                s.sel_win = 0;
-                true
-            } else {
-                false
-            }
+            let pos = {
+                let s = state.borrow();
+                let cur_o = s.sel_output();
+                s.model.nav.iter().position(|&(o, _)| o == cur_o)
+            };
+            select_nav(state, app, pos)
         }
         (Some('>'), _) => {
-            let mut s = state.borrow_mut();
-            let cur_o = s.sel_output();
-            if let Some(pos) = s.model.nav.iter().rposition(|&(o, _)| o == cur_o) {
-                s.sel_nav = pos;
-                s.sel_win = 0;
-                true
-            } else {
-                false
-            }
+            let pos = {
+                let s = state.borrow();
+                let cur_o = s.sel_output();
+                s.model.nav.iter().rposition(|&(o, _)| o == cur_o)
+            };
+            select_nav(state, app, pos)
         }
         _ => false,
     }
 }
 
-fn move_ws(state: &Rc<RefCell<State>>, delta: i32) -> bool {
-    let mut s = state.borrow_mut();
-    let Some(next) = step_nav(&s.model.nav, s.sel_nav, delta, s.solo) else {
-        return false;
-    };
-    if next != s.sel_nav {
+fn move_ws(state: &Rc<RefCell<State>>, app: &Application, delta: i32) -> bool {
+    {
+        let mut s = state.borrow_mut();
+        let Some(next) = step_nav(&s.model.nav, s.sel_nav, delta, s.solo) else {
+            return false;
+        };
+        if next == s.sel_nav {
+            return false;
+        }
         s.sel_nav = next;
         s.sel_win = 0;
-        true
-    } else {
-        false
     }
+    queue_auto_show(state, app);
+    true
+}
+
+/// Jump the selection to nav index `pos`, on that workspace's first window, and
+/// offer it to auto-show. Returns true when the selection changed.
+fn select_nav(state: &Rc<RefCell<State>>, app: &Application, pos: Option<usize>) -> bool {
+    let changed = {
+        let mut s = state.borrow_mut();
+        let Some(pos) = pos else {
+            return false;
+        };
+        let changed = pos != s.sel_nav || s.sel_win != 0;
+        s.sel_nav = pos;
+        s.sel_win = 0;
+        changed
+    };
+    if changed {
+        queue_auto_show(state, app);
+    }
+    changed
 }
 
 /// Move the selected workspace up/down within its monitor. The selection is
 /// preserved by id across the refresh, so the highlight follows the workspace.
-fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
+fn move_selected_ws(state: &Rc<RefCell<State>>, app: &Application, down: bool) -> bool {
     let target = {
         let s = state.borrow();
         s.sel_ws()
@@ -1044,6 +1146,7 @@ fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
         let focus = capture_focus();
         let _ = niri::move_workspace(&output, idx, down);
         restore_focus(focus);
+        keep_grab_under_auto_show(state, app);
         refresh(state);
         true
     } else {
@@ -1051,10 +1154,20 @@ fn move_selected_ws(state: &Rc<RefCell<State>>, down: bool) -> bool {
     }
 }
 
+/// Take the keyboard grab back after an action that moved niri's focus around,
+/// while auto-show is on. There the restored focus sits on the previewed target
+/// rather than on the overlay, and a workspace that crossed outputs moves niri's
+/// output focus with it.
+fn keep_grab_under_auto_show(state: &Rc<RefCell<State>>, app: &Application) {
+    if state.borrow().auto_show.is_on() {
+        regrab_keyboard(app);
+    }
+}
+
 /// Move the selected window's column left/right within its workspace, then
 /// restore focus to where the user left it (moving requires focusing a window
 /// in the column). The selection follows the window by id across the refresh.
-fn move_selected_column(state: &Rc<RefCell<State>>, right: bool) -> bool {
+fn move_selected_column(state: &Rc<RefCell<State>>, app: &Application, right: bool) -> bool {
     let win_id = match state.borrow().selected_win_id() {
         Some(id) => id,
         None => return false,
@@ -1064,13 +1177,14 @@ fn move_selected_column(state: &Rc<RefCell<State>>, right: bool) -> bool {
     let focus = capture_focus();
     let _ = niri::move_column(win_id, right);
     restore_focus(focus);
+    keep_grab_under_auto_show(state, app);
     refresh(state);
     true
 }
 
 /// Move the selected workspace to the monitor on the left/right. The selection
 /// follows the workspace by id across the refresh, so it lands on the new screen.
-fn move_selected_ws_to_monitor(state: &Rc<RefCell<State>>, left: bool) -> bool {
+fn move_selected_ws_to_monitor(state: &Rc<RefCell<State>>, app: &Application, left: bool) -> bool {
     let target = match state.borrow().selected_ws_id() {
         Some(id) => id,
         None => return false,
@@ -1080,28 +1194,32 @@ fn move_selected_ws_to_monitor(state: &Rc<RefCell<State>>, left: bool) -> bool {
         let _ = niri::move_workspace_to_monitor(left);
     }
     restore_focus(focus);
+    keep_grab_under_auto_show(state, app);
     refresh(state);
     true
 }
 
 /// Jump the selection to the first workspace of the next/previous output,
 /// wrapping around. With two screens this just toggles between them.
-fn move_output(state: &Rc<RefCell<State>>, delta: i32) -> bool {
-    let mut s = state.borrow_mut();
-    let count = s.model.outputs.len();
-    let Some((idx, next)) = step_output(&s.model.nav, s.sel_nav, count, delta) else {
-        return false;
-    };
-    if idx != s.sel_nav {
+fn move_output(state: &Rc<RefCell<State>>, app: &Application, delta: i32) -> bool {
+    {
+        let mut s = state.borrow_mut();
+        let count = s.model.outputs.len();
+        let Some((idx, next)) = step_output(&s.model.nav, s.sel_nav, count, delta) else {
+            return false;
+        };
+        if idx == s.sel_nav {
+            return false;
+        }
         s.sel_nav = idx;
         s.sel_win = 0;
-        // In solo mode, switching screens swaps which one is shown.
+        // In solo mode, switching outputs swaps which one is shown.
         if s.solo.is_some() {
             s.solo = Some(next);
         }
-        return true;
     }
-    false
+    queue_auto_show(state, app);
+    true
 }
 
 /// Handle a keystroke while the theme picker is open. Up/Down (or k/j) move and
@@ -1150,19 +1268,21 @@ fn move_picker(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     false
 }
 
-fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
-    let mut s = state.borrow_mut();
-    let count = s.sel_ws().map(|v| v.windows.len()).unwrap_or(0);
-    if count == 0 {
-        return false;
-    }
-    let next = step_win(count, s.sel_win, delta);
-    if next != s.sel_win {
+fn move_win(state: &Rc<RefCell<State>>, app: &Application, delta: i32) -> bool {
+    {
+        let mut s = state.borrow_mut();
+        let count = s.sel_ws().map(|v| v.windows.len()).unwrap_or(0);
+        if count == 0 {
+            return false;
+        }
+        let next = step_win(count, s.sel_win, delta);
+        if next == s.sel_win {
+            return false;
+        }
         s.sel_win = next;
-        true
-    } else {
-        false
     }
+    queue_auto_show(state, app);
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,7 +1448,7 @@ fn animate_step(state: &Rc<RefCell<State>>, w: f64, h: f64) -> bool {
 }
 
 /// Apply a drop via niri actions, then clear the drag and refresh.
-fn apply_drop(state: &Rc<RefCell<State>>, kind: &DragKind, target: DropTarget) {
+fn apply_drop(state: &Rc<RefCell<State>>, app: &Application, kind: &DragKind, target: DropTarget) {
     if let (DragKind::Workspace { id }, DropTarget::Workspace { o, idx }) = (kind, target) {
         let (out_name, niri_idx, same) = {
             let s = state.borrow();
@@ -1405,13 +1525,17 @@ fn apply_drop(state: &Rc<RefCell<State>>, kind: &DragKind, target: DropTarget) {
         }
         restore_focus(focus);
     }
-    {
-        let mut s = state.borrow_mut();
-        s.drag = None;
-        s.anim_ws.clear();
-        s.anim_col.clear();
-    }
+    keep_grab_under_auto_show(state, app);
+    clear_drag(state);
     refresh(state);
+}
+
+/// Forget the in-progress drag and the reflow animation it drove.
+fn clear_drag(state: &Rc<RefCell<State>>) {
+    let mut s = state.borrow_mut();
+    s.drag = None;
+    s.anim_ws.clear();
+    s.anim_col.clear();
 }
 
 fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
@@ -1597,6 +1721,14 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         }
     }
 
+    // Shown whether or not the overlay has the keyboard: auto-show moves niri's
+    // focus as soon as a key is pressed, so a background map has to admit it.
+    let hint_offset = if state.auto_show.is_on() {
+        draw_auto_show_pill(cr, w, h, t)
+    } else {
+        0.0
+    };
+
     if state.picker.is_some() {
         draw_picker(cr, w, h, state);
     } else if let Some(edit) = &state.editing {
@@ -1605,7 +1737,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
         draw_help(cr, w, h, t);
     } else if state.active {
         // The hint is interaction guidance; hide it on the passive map too.
-        draw_hint(cr, w, h, t);
+        draw_hint(cr, w, h, t, hint_offset);
     }
 }
 
@@ -2022,6 +2154,7 @@ fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
             &[
                 "Tab/Shift+Tab switch screen",
                 "s solo screen",
+                "f auto-show",
                 "Enter focus, stay open",
                 "Shift+Enter focus",
                 "t theme",
@@ -2053,12 +2186,31 @@ fn wrap_items(cr: &gtk::cairo::Context, font: Font, items: &[&str], max_w: f64) 
 }
 
 /// A small unobtrusive hint in the bottom-right so the legend is discoverable.
-fn draw_hint(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
+/// `right_offset` is the room already taken at that corner.
+fn draw_hint(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme, right_offset: f64) {
     set(cr, t.subtext, 0.5);
     let f = Font::new(12.0);
     let s = "? keys";
     let tw = text_width(cr, f, s);
-    text_at(cr, w - PAD - tw, h - 7.0, f, s);
+    text_at(cr, w - PAD - right_offset - tw, h - 7.0, f, s);
+}
+
+/// An accent pill in the bottom-right corner marking auto-show as on. Returns the
+/// width it claims at that corner, including the gap before whatever sits left of
+/// it.
+fn draw_auto_show_pill(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) -> f64 {
+    let f = Font::new(12.0);
+    let label = "auto-show";
+    let pill_w = text_width(cr, f, label) + 16.0;
+    let pill_h = 20.0;
+    let x = w - PAD - pill_w;
+    let y = h - pill_h - 2.0;
+    set(cr, t.accent, 0.22);
+    rounded_rect(cr, x, y, pill_w, pill_h, pill_h / 2.0);
+    let _ = cr.fill();
+    set(cr, t.accent, 0.95);
+    text_at(cr, x + 8.0, y + 14.0, f, label);
+    pill_w + 10.0
 }
 
 /// The key legend as a centered panel (toggled with `?`), grouped by target.

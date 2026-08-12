@@ -52,6 +52,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Ctrl+H`       | Move the selected window's column left within the workspace |
 | `Tab` / `Shift+Tab` | Jump straight to the next / previous screen (output) |
 | `s`            | Solo the selected monitor (toggle): show only it, full-width; `Tab` then swaps which one |
+| `f`            | Auto-show (toggle): niri's focus follows the selection as I navigate |
 | `Enter`        | Focus the selected window (or workspace if empty); the overlay stays open and keyboard-focused |
 | `Shift+Enter`  | Same, but dismiss the overlay if the target is on the overlay's own monitor |
 | `r`            | Rename the selected workspace (inline text field) |
@@ -88,6 +89,57 @@ output is shown, laid out full-width (`compute_layout` takes a `solo` arg and
 `layout_output` places that one output across the whole content area). While
 solo, `j`/`k` navigation is confined to that output and `Tab` swaps which output
 is solo'd. Press `s` again to show all screens.
+
+## Auto-show
+
+`f` toggles **auto-show** (`State::auto_show`, the state machine in
+`src/autoshow.rs`): while it's on, niri's focus follows the selection, so
+navigating the map previews each window on its own screen. It's what `Enter` does,
+run on every navigation step — mainly for the two-output setup where the overlay
+sits on one output and maps another (`--open-on-monitor eDP-1 --solo HDMI-A-1`).
+
+Turning it on **arms** it and focuses nothing: it seeds itself with niri's current
+focus (`State::focused_target`), so the invariant is *niri's focus equals the
+selection* and navigating away and back costs no niri calls. The seed is re-taken
+on every enable, and turning it off drops anything waiting to be sent. The mode is
+session-only — off at launch, with no config key and no flag.
+
+Only navigation focuses anything: `j`/`k`, `h`/`l`, `1`–`9`, `<`/`>`, `Tab` (all
+routed through `navigated()`), plus a pointer click that changed the selection.
+Because `hit_select()` runs on press with `drag` already armed, that click case
+lives in `drag_end` and fires only when no drag happened. Selection changes that
+come out of a refresh never focus anything — not the clamp after a kill, not the
+snap to niri's focus when the overlay regains the keyboard — which keeps the rule
+to one sentence and leaves niri's own focus-after-close behaviour alone.
+
+The target is whatever the map highlights, so after a `j`/`k` step it's the
+workspace's first window (`move_ws` resets `sel_win`); an empty workspace falls
+back to `focus-workspace`. `preview_selection()` focuses it and hands the keyboard
+grab straight back (`regrab_keyboard`) with no synchronous refresh — the focus
+change makes niri emit an event, and the event stream redraws from that.
+
+A ~120 ms debounce (`AUTO_SHOW_DEBOUNCE`) coalesces bursts: one pending target,
+latest wins, so holding `j` through ten workspaces costs one focus call. A pending
+target equal to the last sent one is dropped. A window that dies during the
+debounce is recorded as sent anyway — no retry at a dead id, no error banner over
+a map being browsed fast. Focus stays on the last previewed target when the mode is
+switched off or the overlay quits; nothing is restored.
+
+A focus the mode didn't make is recorded too (`AutoShow::record_sent`, called from
+`activate_selection`), so `Enter` and the second-click path keep the guard matching
+niri. Without it, a target focused by hand looks unfocused to the guard and the next
+navigation back to it would be dropped as redundant, leaving the accent border and
+niri's focus on different windows.
+
+The move actions (`Shift+J`/`K`, `Shift+H`/`L`, `Ctrl+H`/`L`, pointer drops) end
+with `keep_grab_under_auto_show()` while the mode is on: their `restore_focus` puts
+niri back on the previewed target rather than the overlay, and a workspace that
+crosses outputs carries niri's output focus with it, either of which would strand
+the keyboard grab.
+
+An accent `auto-show` pill sits in the bottom-right beside the `? keys` hint, drawn
+even when the overlay is unfocused — the mode moves focus as soon as a key is
+pressed, so a background map has to show it's armed.
 
 ## Mouse drag-and-drop
 
@@ -334,6 +386,9 @@ accepted trade for a uniformly monochrome map.
   `refresh()` rebuilds it while preserving the selection by id, the key handler, and
   the cairo drawing functions (`draw` → `draw_workspace` → `draw_window`, plus
   `draw_rename` / `draw_picker`).
+- `src/autoshow.rs` — the auto-show mode's bookkeeping: the target niri's focus
+  was last pointed at, the one waiting behind the debounce, and the rules for
+  which of them to send. Plain state, so its rules are unit-tested directly.
 - `src/theme.rs` — the `Theme` struct, derived-color helpers, and the bundled
   theme presets.
 - `src/config.rs` — locating, creating, reading and writing the KDL config.
