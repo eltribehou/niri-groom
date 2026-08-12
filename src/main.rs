@@ -16,7 +16,7 @@ mod theme;
 use crate::edit::Edit;
 use crate::emoji::force_text_presentation;
 use crate::layout::{compute_layout, ColLayout, WsLayout, PAD, WS_HEADER_H};
-use crate::model::{build_model, Model, WsView};
+use crate::model::{build_model, step_nav, step_output, step_win, Model, WsView};
 use crate::opts::{derive_app_id, parse_args, Opts};
 use crate::pointer::{
     column_drop_target, column_reflow, hit_column, hit_select, hit_workspace_header,
@@ -1019,16 +1019,9 @@ fn handle_key(
 
 fn move_ws(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     let mut s = state.borrow_mut();
-    // Candidate nav indices: all, or only the solo output's.
-    let solo = s.solo;
-    let nav: Vec<usize> = (0..s.model.nav.len())
-        .filter(|&i| solo.is_none_or(|o| s.model.nav[i].0 == o))
-        .collect();
-    if nav.is_empty() {
+    let Some(next) = step_nav(&s.model.nav, s.sel_nav, delta, s.solo) else {
         return false;
-    }
-    let pos = nav.iter().position(|&i| i == s.sel_nav).unwrap_or(0) as i32;
-    let next = nav[(pos + delta).clamp(0, nav.len() as i32 - 1) as usize];
+    };
     if next != s.sel_nav {
         s.sel_nav = next;
         s.sel_win = 0;
@@ -1095,22 +1088,18 @@ fn move_selected_ws_to_monitor(state: &Rc<RefCell<State>>, left: bool) -> bool {
 /// wrapping around. With two screens this just toggles between them.
 fn move_output(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     let mut s = state.borrow_mut();
-    let n_out = s.model.outputs.len();
-    if n_out < 2 {
+    let count = s.model.outputs.len();
+    let Some((idx, next)) = step_output(&s.model.nav, s.sel_nav, count, delta) else {
         return false;
-    }
-    let cur = s.sel_output();
-    let next = ((cur as i32 + delta).rem_euclid(n_out as i32)) as usize;
-    if let Some(idx) = s.model.nav.iter().position(|&(o, _)| o == next) {
-        if idx != s.sel_nav {
-            s.sel_nav = idx;
-            s.sel_win = 0;
-            // In solo mode, switching screens swaps which one is shown.
-            if s.solo.is_some() {
-                s.solo = Some(next);
-            }
-            return true;
+    };
+    if idx != s.sel_nav {
+        s.sel_nav = idx;
+        s.sel_win = 0;
+        // In solo mode, switching screens swaps which one is shown.
+        if s.solo.is_some() {
+            s.solo = Some(next);
         }
+        return true;
     }
     false
 }
@@ -1167,8 +1156,7 @@ fn move_win(state: &Rc<RefCell<State>>, delta: i32) -> bool {
     if count == 0 {
         return false;
     }
-    let cur = s.sel_win as i32;
-    let next = (cur + delta).clamp(0, count as i32 - 1) as usize;
+    let next = step_win(count, s.sel_win, delta);
     if next != s.sel_win {
         s.sel_win = next;
         true

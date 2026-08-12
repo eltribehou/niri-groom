@@ -29,6 +29,56 @@ pub struct Model {
     pub nav: Vec<(usize, usize)>,
 }
 
+/// Where `delta` steps of workspace navigation land, as an index into `nav`.
+///
+/// Stepping runs over the flat nav order, so it crosses from the last workspace
+/// of one output to the first of the next. Solo mode confines it to the soloed
+/// output. The ends clamp rather than wrap. `None` means there is nowhere to go.
+pub fn step_nav(
+    nav: &[(usize, usize)],
+    sel: usize,
+    delta: i32,
+    solo: Option<usize>,
+) -> Option<usize> {
+    let candidates: Vec<usize> = (0..nav.len())
+        .filter(|&i| solo.is_none_or(|o| nav[i].0 == o))
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let pos = candidates.iter().position(|&i| i == sel).unwrap_or(0) as i32;
+    let clamped = (pos + delta).clamp(0, candidates.len() as i32 - 1) as usize;
+    Some(candidates[clamped])
+}
+
+/// Where `delta` steps of output navigation land, as `(nav index, output
+/// index)` — the first workspace of the next output, wrapping around. `None`
+/// when there are fewer than two outputs, or the target output holds no
+/// workspaces.
+pub fn step_output(
+    nav: &[(usize, usize)],
+    sel: usize,
+    output_count: usize,
+    delta: i32,
+) -> Option<(usize, usize)> {
+    if output_count < 2 {
+        return None;
+    }
+    let current = nav.get(sel).map(|&(o, _)| o).unwrap_or(0);
+    let next = ((current as i32 + delta).rem_euclid(output_count as i32)) as usize;
+    let idx = nav.iter().position(|&(o, _)| o == next)?;
+    Some((idx, next))
+}
+
+/// Where `delta` steps of window navigation land within a workspace holding
+/// `count` windows. Both ends clamp, so it never leaves the workspace.
+pub fn step_win(count: usize, sel: usize, delta: i32) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    (sel as i32 + delta).clamp(0, count as i32 - 1) as usize
+}
+
 /// Build the model from a fresh niri snapshot.
 pub fn build_model() -> Result<Model, String> {
     let workspaces = niri::fetch_workspaces()?;
