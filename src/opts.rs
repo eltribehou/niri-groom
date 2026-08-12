@@ -29,7 +29,12 @@ pub struct Opts {
 }
 
 pub fn parse_args() -> Opts {
-    let argv: Vec<String> = std::env::args().collect();
+    parse_argv(&std::env::args().collect::<Vec<String>>())
+}
+
+/// Read the options out of a full argv, whose first entry is the program name.
+/// An unknown flag is skipped, and a flag missing its value leaves the default.
+fn parse_argv(argv: &[String]) -> Opts {
     let mut namespace = APP_NAMESPACE.to_string();
     let mut solo_monitor = None;
     let mut output = None;

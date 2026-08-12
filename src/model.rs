@@ -33,7 +33,17 @@ pub struct Model {
 pub fn build_model() -> Result<Model, String> {
     let workspaces = niri::fetch_workspaces()?;
     let windows = niri::fetch_windows()?;
+    let outputs = niri::fetch_outputs().unwrap_or_default();
+    Ok(model_from(workspaces, windows, outputs))
+}
 
+/// Arrange a niri snapshot into the model: windows onto their workspaces,
+/// workspaces onto their outputs, outputs left to right.
+fn model_from(
+    workspaces: Vec<niri::Workspace>,
+    windows: Vec<niri::Window>,
+    outputs_geom: Vec<niri::Output>,
+) -> Model {
     // Bucket windows by their workspace id.
     let mut by_ws: BTreeMap<u64, Vec<niri::Window>> = BTreeMap::new();
     for w in windows {
@@ -43,8 +53,7 @@ pub fn build_model() -> Result<Model, String> {
     }
 
     // Logical placement per output, so I can draw screens where niri puts them.
-    let geom: BTreeMap<String, (f64, f64, f64)> = niri::fetch_outputs()
-        .unwrap_or_default()
+    let geom: BTreeMap<String, (f64, f64, f64)> = outputs_geom
         .into_iter()
         .filter_map(|o| o.logical.map(|l| (o.name, (l.x, l.y, l.width))))
         .collect();
@@ -106,5 +115,5 @@ pub fn build_model() -> Result<Model, String> {
         }
     }
 
-    Ok(Model { outputs, nav })
+    Model { outputs, nav }
 }
