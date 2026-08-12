@@ -112,3 +112,118 @@ impl Edit {
         self.buf.drain(self.cursor..end);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The buffer with `|` marking the cursor, so a test says what the user
+    /// would see rather than asserting on two fields at once.
+    fn render(e: &Edit) -> String {
+        let mut s: String = e.buf[..e.cursor].iter().collect();
+        s.push('|');
+        s.extend(&e.buf[e.cursor..]);
+        s
+    }
+
+    fn at(text: &str) -> Edit {
+        let cursor = text.find('|').expect("marker");
+        let buf: Vec<char> = text.chars().filter(|&c| c != '|').collect();
+        Edit {
+            cursor: text[..cursor].chars().count(),
+            buf,
+        }
+    }
+
+    #[test]
+    fn opens_with_the_cursor_after_the_existing_name() {
+        assert_eq!(render(&Edit::new("code")), "code|");
+    }
+
+    #[test]
+    fn typing_inserts_at_the_cursor() {
+        let mut e = at("co|de");
+        e.insert('r');
+        assert_eq!(render(&e), "cor|de");
+    }
+
+    #[test]
+    fn backspace_and_delete_take_the_char_on_either_side() {
+        let mut e = at("ab|cd");
+        e.backspace();
+        assert_eq!(render(&e), "a|cd");
+        e.delete();
+        assert_eq!(render(&e), "a|d");
+    }
+
+    #[test]
+    fn deleting_past_either_end_leaves_the_line_alone() {
+        let mut e = at("|ab");
+        e.backspace();
+        assert_eq!(render(&e), "|ab");
+        let mut e = at("ab|");
+        e.delete();
+        assert_eq!(render(&e), "ab|");
+    }
+
+    #[test]
+    fn the_cursor_stops_at_both_ends() {
+        let mut e = at("|a");
+        e.left();
+        assert_eq!(render(&e), "|a");
+        e.right();
+        e.right();
+        assert_eq!(render(&e), "a|");
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_edges() {
+        let mut e = at("ab|cd");
+        e.home();
+        assert_eq!(render(&e), "|abcd");
+        e.end();
+        assert_eq!(render(&e), "abcd|");
+    }
+
+    #[test]
+    fn kill_clears_the_side_the_cursor_points_at() {
+        let mut e = at("ab|cd");
+        e.kill_to_end();
+        assert_eq!(render(&e), "ab|");
+        let mut e = at("ab|cd");
+        e.kill_to_start();
+        assert_eq!(render(&e), "|cd");
+    }
+
+    #[test]
+    fn word_motion_skips_the_separators_before_the_word() {
+        let mut e = at("alpha  beta|");
+        e.word_left();
+        assert_eq!(render(&e), "alpha  |beta");
+        e.word_left();
+        assert_eq!(render(&e), "|alpha  beta");
+        e.word_right();
+        assert_eq!(render(&e), "alpha|  beta");
+    }
+
+    #[test]
+    fn killing_a_word_takes_its_separators_with_it() {
+        let mut e = at("alpha  beta|");
+        e.kill_word_left();
+        assert_eq!(render(&e), "alpha  |");
+        let mut e = at("|alpha  beta");
+        e.kill_word_right();
+        assert_eq!(render(&e), "|  beta");
+    }
+
+    #[test]
+    fn the_cursor_counts_characters_not_bytes() {
+        let mut e = Edit::new("héllo");
+        assert_eq!(e.cursor, 5);
+        e.backspace();
+        assert_eq!(e.text(), "héll");
+        let mut e = at("é|à");
+        e.backspace();
+        assert_eq!(e.text(), "à");
+    }
+}
