@@ -389,3 +389,20 @@ harmless — GTK probes for Vulkan and falls back to the GL/cairo renderer.
   build. So after implementing a change, **always finish by running
   `cargo build --release`** (inside `nix develop`) to refresh it — otherwise I won't
   see the change.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/` in this
+repo, and are committed. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` and `docs/adr/` at the repo root, both created lazily
+when a term or a decision actually needs recording. See `docs/agents/domain.md`.
