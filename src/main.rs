@@ -4,9 +4,11 @@
 
 mod badges;
 mod config;
+mod edit;
 mod niri;
 mod theme;
 
+use crate::edit::Edit;
 use crate::theme::{Rgb, Theme};
 use gtk4 as gtk;
 
@@ -51,120 +53,6 @@ struct Model {
     outputs: Vec<OutputView>,
     /// `(output index, workspace index within output)` in display order.
     nav: Vec<(usize, usize)>,
-}
-
-/// A tiny line editor for the rename field, with a cursor and readline-style
-/// (Emacs) editing operations. Stored as chars so the cursor is codepoint-safe.
-struct Edit {
-    buf: Vec<char>,
-    cursor: usize,
-}
-
-impl Edit {
-    fn new(s: &str) -> Self {
-        let buf: Vec<char> = s.chars().collect();
-        let cursor = buf.len();
-        Edit { buf, cursor }
-    }
-
-    fn text(&self) -> String {
-        self.buf.iter().collect()
-    }
-
-    fn insert(&mut self, c: char) {
-        self.buf.insert(self.cursor, c);
-        self.cursor += 1;
-    }
-
-    /// Delete the char before the cursor (Backspace / C-h).
-    fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            self.buf.remove(self.cursor);
-        }
-    }
-
-    /// Delete the char at the cursor (Delete / C-d).
-    fn delete(&mut self) {
-        if self.cursor < self.buf.len() {
-            self.buf.remove(self.cursor);
-        }
-    }
-
-    fn left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    fn right(&mut self) {
-        if self.cursor < self.buf.len() {
-            self.cursor += 1;
-        }
-    }
-
-    fn home(&mut self) {
-        self.cursor = 0;
-    }
-
-    fn end(&mut self) {
-        self.cursor = self.buf.len();
-    }
-
-    /// Kill from the cursor to the end of the line (C-k).
-    fn kill_to_end(&mut self) {
-        self.buf.truncate(self.cursor);
-    }
-
-    /// Kill from the start of the line to the cursor (C-u).
-    fn kill_to_start(&mut self) {
-        self.buf.drain(0..self.cursor);
-        self.cursor = 0;
-    }
-
-    /// Word boundary to the left of the cursor (skip separators, then word).
-    fn prev_word(&self) -> usize {
-        let mut i = self.cursor;
-        while i > 0 && !self.buf[i - 1].is_alphanumeric() {
-            i -= 1;
-        }
-        while i > 0 && self.buf[i - 1].is_alphanumeric() {
-            i -= 1;
-        }
-        i
-    }
-
-    /// Word boundary to the right of the cursor.
-    fn next_word(&self) -> usize {
-        let n = self.buf.len();
-        let mut i = self.cursor;
-        while i < n && !self.buf[i].is_alphanumeric() {
-            i += 1;
-        }
-        while i < n && self.buf[i].is_alphanumeric() {
-            i += 1;
-        }
-        i
-    }
-
-    fn word_left(&mut self) {
-        self.cursor = self.prev_word();
-    }
-
-    fn word_right(&mut self) {
-        self.cursor = self.next_word();
-    }
-
-    /// Kill the word before the cursor (C-w / M-Backspace).
-    fn kill_word_left(&mut self) {
-        let start = self.prev_word();
-        self.buf.drain(start..self.cursor);
-        self.cursor = start;
-    }
-
-    /// Kill the word after the cursor (M-d).
-    fn kill_word_right(&mut self) {
-        let end = self.next_word();
-        self.buf.drain(self.cursor..end);
-    }
 }
 
 /// What the pointer is dragging.
