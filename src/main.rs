@@ -6,12 +6,14 @@ mod badges;
 mod config;
 mod edit;
 mod emoji;
+mod model;
 mod niri;
 mod opts;
 mod theme;
 
 use crate::edit::Edit;
 use crate::emoji::force_text_presentation;
+use crate::model::{build_model, Model, WsView};
 use crate::opts::{derive_app_id, parse_args, Opts};
 use crate::theme::{Rgb, Theme};
 use gtk4 as gtk;
@@ -24,35 +26,10 @@ use gtk::prelude::*;
 use gtk::{Application, ApplicationWindow, DrawingArea, EventControllerKey};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::rc::Rc;
 use std::time::Duration;
-
-/// A workspace together with the windows it holds (sorted by column, then row).
-struct WsView {
-    ws: niri::Workspace,
-    windows: Vec<niri::Window>,
-}
-
-/// One output (monitor) and its workspaces, sorted by index. `x`/`y` are niri's
-/// logical position (used to order/place outputs) and `w` its logical width
-/// (used for proportional horizontal sizing). Height isn't kept — outputs are
-/// drawn full-height.
-struct OutputView {
-    name: String,
-    workspaces: Vec<WsView>,
-    x: f64,
-    y: f64,
-    w: f64,
-}
-
-/// The full picture I draw, plus a flat navigation order over workspaces.
-struct Model {
-    outputs: Vec<OutputView>,
-    /// `(output index, workspace index within output)` in display order.
-    nav: Vec<(usize, usize)>,
-}
 
 /// What the pointer is dragging.
 #[derive(Clone)]
@@ -199,86 +176,6 @@ impl State {
             .map(|&(o, _)| o)
             .unwrap_or(0)
     }
-}
-
-/// Build the model from a fresh niri snapshot.
-fn build_model() -> Result<Model, String> {
-    let workspaces = niri::fetch_workspaces()?;
-    let windows = niri::fetch_windows()?;
-
-    // Bucket windows by their workspace id.
-    let mut by_ws: BTreeMap<u64, Vec<niri::Window>> = BTreeMap::new();
-    for w in windows {
-        if let Some(ws_id) = w.workspace_id {
-            by_ws.entry(ws_id).or_default().push(w);
-        }
-    }
-
-    // Logical placement per output, so I can draw screens where niri puts them.
-    let geom: BTreeMap<String, (f64, f64, f64)> = niri::fetch_outputs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|o| o.logical.map(|l| (o.name, (l.x, l.y, l.width))))
-        .collect();
-
-    // Group workspaces by output.
-    let mut by_output: BTreeMap<String, Vec<niri::Workspace>> = BTreeMap::new();
-    for ws in workspaces {
-        let out = ws.output.clone().unwrap_or_else(|| "?".to_string());
-        by_output.entry(out).or_default().push(ws);
-    }
-
-    // Build an OutputView per output, falling back to a synthetic horizontal row
-    // for any output niri didn't report geometry for (disabled, or no `outputs`).
-    let mut fallback_x = 0.0;
-    let mut outputs: Vec<OutputView> = Vec::new();
-    for (name, mut wss) in by_output {
-        wss.sort_by_key(|w| w.idx);
-        let workspaces = wss
-            .into_iter()
-            .filter_map(|ws| {
-                let mut wins = by_ws.remove(&ws.id).unwrap_or_default();
-                wins.sort_by_key(|w| (w.column(), w.row(), w.id));
-                // Hide unnamed empty workspaces: these are niri's scratch space
-                // (the permanent trailing one plus any transient empties). They
-                // can't be meaningfully killed and only clutter the map. Named
-                // empty workspaces stay — `w` unsets the name and niri reclaims.
-                if wins.is_empty() && ws.name.is_none() {
-                    return None;
-                }
-                Some(WsView { ws, windows: wins })
-            })
-            .collect();
-        let (x, y, w) = geom.get(&name).copied().unwrap_or_else(|| {
-            let g = (fallback_x, 0.0, 1600.0);
-            fallback_x += 1600.0;
-            g
-        });
-        outputs.push(OutputView {
-            name,
-            workspaces,
-            x,
-            y,
-            w,
-        });
-    }
-
-    // Order outputs left-to-right, then top-to-bottom, by logical position.
-    outputs.sort_by(|a, b| {
-        a.x.partial_cmp(&b.x)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
-    });
-
-    // Flat nav order over all workspaces, following the output order above.
-    let mut nav = Vec::new();
-    for (o_idx, output) in outputs.iter().enumerate() {
-        for w_idx in 0..output.workspaces.len() {
-            nav.push((o_idx, w_idx));
-        }
-    }
-
-    Ok(Model { outputs, nav })
 }
 
 /// Refresh the model in place, preserving the selection by id where possible.
