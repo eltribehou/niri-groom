@@ -300,7 +300,7 @@ mod tests {
             .build()
     }
 
-    fn card<'a>(layout: &'a Layout, o: usize, wi: usize) -> &'a WsLayout {
+    fn card(layout: &Layout, o: usize, wi: usize) -> &WsLayout {
         layout
             .workspaces
             .iter()

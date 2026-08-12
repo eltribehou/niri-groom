@@ -163,3 +163,120 @@ pub fn compute_layout(model: &Model, w: f64, h: f64, solo: Option<usize>) -> Lay
     }
     layout
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::fixtures::Snapshot;
+
+    const W: f64 = 1600.0;
+    const H: f64 = 900.0;
+
+    /// eDP-1 is 1920 wide at x=0; HDMI-A-1 is 2560 wide immediately to its right.
+    fn two_outputs() -> Model {
+        Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(2, 1, Some("chat"))
+            .window(20, 1, 1)
+            .build()
+    }
+
+    #[test]
+    fn outputs_keep_their_relative_widths() {
+        let layout = compute_layout(&two_outputs(), W, H, None);
+        let narrow = &layout.outputs[0];
+        let wide = &layout.outputs[1];
+        // 2560/1920 = 4/3, so the wider screen is drawn a third wider.
+        assert!((wide.w / narrow.w - 4.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn outputs_are_placed_side_by_side_across_the_content_area() {
+        let layout = compute_layout(&two_outputs(), W, H, None);
+        assert_eq!(layout.outputs[0].x, PAD);
+        // The right-hand screen starts where the left one ends.
+        let left = &layout.outputs[0];
+        assert!((layout.outputs[1].x - (left.x + left.w)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_soloed_output_takes_the_whole_width_on_its_own() {
+        let layout = compute_layout(&two_outputs(), W, H, Some(1));
+        assert_eq!(layout.outputs.len(), 1);
+        assert_eq!(layout.outputs[0].o, 1);
+        assert_eq!(layout.outputs[0].w, W - 2.0 * PAD);
+    }
+
+    #[test]
+    fn soloing_an_output_that_is_not_there_shows_every_output() {
+        let layout = compute_layout(&two_outputs(), W, H, Some(9));
+        assert_eq!(layout.outputs.len(), 2);
+    }
+
+    #[test]
+    fn windows_sharing_a_niri_column_share_one_slot() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .window(11, 1, 2)
+            .window(12, 2, 1)
+            .build();
+        let layout = compute_layout(&model, W, H, None);
+        let cols = &layout.workspaces[0].cols;
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0].win_lin, [0, 1]);
+        assert_eq!(cols[1].win_lin, [2]);
+    }
+
+    #[test]
+    fn columns_split_the_card_evenly() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .window(11, 2, 1)
+            .build();
+        let layout = compute_layout(&model, W, H, None);
+        let cols = &layout.workspaces[0].cols;
+        assert!((cols[0].w - cols[1].w).abs() < 1e-9);
+        assert!((cols[1].x - (cols[0].x + cols[0].w)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn workspace_cards_stack_down_the_output() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("code"))
+            .window(10, 1, 1)
+            .workspace(2, 2, Some("web"))
+            .window(20, 1, 1)
+            .build();
+        let layout = compute_layout(&model, W, H, None);
+        let (first, second) = (&layout.workspaces[0], &layout.workspaces[1]);
+        assert_eq!(first.x, second.x);
+        assert!((second.y - (first.y + first.h + WS_GAP)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_empty_workspace_gets_a_card_but_no_columns() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(1, 1, Some("scratch"))
+            .build();
+        let layout = compute_layout(&model, W, H, None);
+        assert_eq!(layout.workspaces.len(), 1);
+        assert!(layout.workspaces[0].cols.is_empty());
+    }
+
+    #[test]
+    fn a_map_with_no_outputs_lays_out_nothing() {
+        let model = Snapshot::new().build();
+        let layout = compute_layout(&model, W, H, None);
+        assert!(layout.outputs.is_empty());
+        assert!(layout.workspaces.is_empty());
+    }
+}

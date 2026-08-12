@@ -82,3 +82,48 @@ pub fn force_text_presentation(text: &str) -> std::borrow::Cow<'_, str> {
     }
     std::borrow::Cow::Owned(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_text_is_passed_through_untouched() {
+        let s = force_text_presentation("nvim ~/src/main.rs");
+        assert!(matches!(s, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn an_emoji_gets_the_text_presentation_selector() {
+        assert_eq!(
+            force_text_presentation("\u{1F600} chat"),
+            "\u{1F600}\u{FE0E} chat"
+        );
+    }
+
+    #[test]
+    fn an_explicit_request_for_color_is_dropped() {
+        // U+2764 defaults to text presentation, so it needs no selector added —
+        // only the color request is removed.
+        assert_eq!(force_text_presentation("\u{2764}\u{FE0F}"), "\u{2764}");
+    }
+
+    #[test]
+    fn a_character_that_already_defaults_to_text_is_left_alone() {
+        assert_eq!(force_text_presentation("\u{2764}"), "\u{2764}");
+    }
+
+    #[test]
+    fn the_presentation_table_is_searched_by_range() {
+        // Ends of the very first range, and the neighbours just outside it.
+        assert!(is_emoji_presentation('\u{231A}'));
+        assert!(is_emoji_presentation('\u{231B}'));
+        assert!(!is_emoji_presentation('\u{2319}'));
+        assert!(!is_emoji_presentation('\u{231C}'));
+        // Ends of the last range.
+        assert!(is_emoji_presentation('\u{1FAEF}'));
+        assert!(is_emoji_presentation('\u{1FAF8}'));
+        assert!(!is_emoji_presentation('\u{1FAF9}'));
+        assert!(!is_emoji_presentation('a'));
+    }
+}

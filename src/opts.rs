@@ -94,3 +94,96 @@ pub fn derive_app_id(namespace: &str) -> String {
         APP_ID.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Opts {
+        let argv: Vec<String> = std::iter::once("niri-groom")
+            .chain(args.iter().copied())
+            .map(str::to_string)
+            .collect();
+        parse_argv(&argv)
+    }
+
+    #[test]
+    fn a_bare_launch_takes_the_defaults() {
+        let o = parse(&[]);
+        assert_eq!(o.namespace, "niri-groom");
+        assert_eq!(o.solo_monitor, None);
+        assert_eq!(o.output, None);
+        assert!(!o.toggle);
+        assert!(!o.focus);
+    }
+
+    #[test]
+    fn a_value_can_be_given_as_a_separate_argument_or_after_an_equals() {
+        assert_eq!(
+            parse(&["--solo", "HDMI-A-1"]).solo_monitor.as_deref(),
+            Some("HDMI-A-1")
+        );
+        assert_eq!(
+            parse(&["--solo=HDMI-A-1"]).solo_monitor.as_deref(),
+            Some("HDMI-A-1")
+        );
+    }
+
+    #[test]
+    fn the_flags_of_a_typical_toggle_bind_are_all_read() {
+        let o = parse(&[
+            "--toggle",
+            "--solo",
+            "HDMI-A-1",
+            "--open-on-monitor",
+            "eDP-1",
+            "--app-id",
+            "niri-groom-map",
+        ]);
+        assert!(o.toggle);
+        assert_eq!(o.solo_monitor.as_deref(), Some("HDMI-A-1"));
+        assert_eq!(o.output.as_deref(), Some("eDP-1"));
+        assert_eq!(o.namespace, "niri-groom-map");
+    }
+
+    #[test]
+    fn a_value_is_not_mistaken_for_a_flag() {
+        // "--focus" here is the value of --solo, however unlikely a screen name.
+        let o = parse(&["--solo", "--focus"]);
+        assert_eq!(o.solo_monitor.as_deref(), Some("--focus"));
+        assert!(!o.focus);
+    }
+
+    #[test]
+    fn an_unknown_flag_is_ignored() {
+        let o = parse(&["--nonsense", "--focus"]);
+        assert!(o.focus);
+    }
+
+    #[test]
+    fn a_flag_left_without_its_value_keeps_the_default() {
+        assert_eq!(parse(&["--app-id"]).namespace, "niri-groom");
+    }
+
+    #[test]
+    fn a_namespace_that_is_already_a_valid_id_is_used_as_is() {
+        assert_eq!(derive_app_id("io.iwd.niri-groom"), "io.iwd.niri-groom");
+    }
+
+    #[test]
+    fn a_bare_namespace_is_qualified_into_a_valid_id() {
+        assert_eq!(derive_app_id("niri-groom-map"), "io.iwd.niri-groom-map");
+    }
+
+    #[test]
+    fn distinct_namespaces_derive_distinct_ids() {
+        // Single-instance is keyed on the id, so a shared id would make two
+        // differently-namespaced overlays the same instance.
+        assert_ne!(derive_app_id("niri-groom-map"), derive_app_id("niri-groom"));
+    }
+
+    #[test]
+    fn a_namespace_that_cannot_be_qualified_falls_back_to_the_default_id() {
+        assert_eq!(derive_app_id("!!!"), APP_ID);
+    }
+}
