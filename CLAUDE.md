@@ -56,7 +56,7 @@ workspace or a single window from the keyboard with no confirmation.
 | `Enter`        | Focus the selected window (or workspace if empty); the overlay stays open and keyboard-focused |
 | `Shift+Enter`  | Same, but dismiss the overlay if the target is on the overlay's own monitor |
 | `r`            | Rename the selected workspace (inline text field) |
-| `m`            | Toggle the selected workspace's marked state (runs the `workspace-mark-toggle` command; opens rename first if the workspace is unnamed) |
+| a `mark-kind` key | Toggle that kind of mark on the selected workspace (runs the kind's command; opens rename first if the workspace is unnamed). `m` and `p` in my config |
 | `t`            | Open the theme picker (live preview; Enter saves, Esc cancels) |
 | `?`            | Toggle the key legend panel (hidden by default; a small `? keys` hint shows) |
 | `w`            | Kill the selected workspace (all windows) — no confirm |
@@ -227,8 +227,8 @@ The config (`src/config.rs`) is `$XDG_CONFIG_HOME/niri-groom/niri-groom.kdl`
 (falling back to `~/.config/...`), created with the default on first run. It's
 read at startup and rewritten on save via the `kdl` crate, which round-trips the
 document so comments and any other keys survive. The schema is `theme
-"<name>"` (default catppuccin-mocha) and an optional `workspace-badges
-command="..."` (see below).
+"<name>"` (default catppuccin-mocha), an optional `workspace-badges
+command="..."` and any number of `mark-kind` nodes (see below).
 
 ## Workspace badges
 
@@ -260,21 +260,43 @@ that knowledge can only come from such a command.
 
 ## Workspace marks
 
-`m` toggles a workspace's *marked* state — the write half of the badge
-mechanism. The app keeps no mark state of its own: a config key
-`workspace-mark-toggle command="<cmd>"` names a command I run (via `sh -c`) with
-the selected workspace name in `$NIRI_GROOM_WORKSPACE`. The command owns the
-store (a file, an extra line in `bookmarks.kdl`, whatever) and flips the mark
-there; the `workspace-badges` command above reads it back, so a marked workspace
-simply shows as a pill — there's no separate rendering. Binding the *same*
-script to a niri key toggles from outside the app, so niri and the overlay share
-one source of truth and can't diverge. With no command configured, `m` is a
-no-op.
+A **mark** is a workspace's flagged state — the write half of the badge
+mechanism. The app keeps no mark state of its own: the config declares the
+*kinds* of mark, each naming a key and a command I run (via `sh -c`):
+
+```kdl
+mark-kind "work"     key="m" command="~/.config/niri/scripts/niri-groom-mark-toggle.sh"
+mark-kind "personal" key="p" command="~/.config/niri/scripts/niri-groom-mark-toggle.sh"
+```
+
+Pressing a kind's key runs its command with the selected workspace name in
+`$NIRI_GROOM_WORKSPACE` and the kind's name in `$NIRI_GROOM_MARK_KIND`. The
+command owns the store (a file, an extra line in `bookmarks.kdl`, whatever) and
+flips the mark there; the `workspace-badges` command above reads it back, so a
+marked workspace simply shows as a pill — there's no separate rendering. Binding
+the *same* script to a niri key toggles from outside the app, so niri and the
+overlay share one source of truth and can't diverge. With no kind declared, no
+key toggles anything.
+
+The name is a label: it reaches the command and it names the key in the `?`
+legend (`key_legend` therefore returns owned strings, one row per kind). Nothing
+else reads it, which is the point — the app never learns that a kind means
+"work" or "personal", and never learns that two kinds exclude each other. My
+work and personal marks *are* mutually exclusive, and that rule lives in the one
+script both kinds point at, which owns both stores and clears the other when it
+sets one. See `docs/adr/0001-mark-kinds-are-configuration.md`.
+
+Several kinds may share a command, and a kind whose key collides with a built-in
+map-mode binding (`RESERVED_KEYS`) is dropped, so a typo can't shadow
+navigation. `m` is absent from that list on purpose: it's the key
+`workspace-mark-toggle command="<cmd>"` uses, the shorthand for a single kind
+named `mark`, read only when no `mark-kind` node is present.
 
 A mark needs a stable identity, and the only stable handle is the workspace
-name (marks are keyed by name, like badges). So `m` on an *unnamed* workspace
-opens the rename field first (`mark_after_rename`), and applies the mark once a
-non-empty name is committed; cancelling the rename clears the pending mark.
+name (marks are keyed by name, like badges). So a mark key on an *unnamed*
+workspace opens the rename field first (`mark_after_rename`, which carries
+*which* kind is pending), and applies the mark once a non-empty name is
+committed; cancelling the rename clears the pending mark.
 
 Because a mark change is just a file write, niri emits no event for it, so a
 toggle from a niri bind would otherwise only show up on the slow 2s fallback
@@ -283,8 +305,8 @@ poll. To make it instant I watch a **refresh-trigger file**
 `gio::FileMonitor`: touching it refreshes every running overlay at once. The
 mark command touches it after writing. It's a generic poke — anything that
 mutates the badge source can touch it — and it's why a background map updates
-immediately when I mark from the keyboard. (The in-overlay `m` key also
-refreshes synchronously, so it doesn't depend on the poke.)
+immediately when I mark from the keyboard. (The in-overlay mark keys also
+refresh synchronously, so they don't depend on the poke.)
 
 `Enter` focuses the *selected window* (`focus-window`), falling back to the
 workspace when it's empty, and never quits: it always hands the keyboard grab

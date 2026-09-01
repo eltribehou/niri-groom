@@ -72,13 +72,13 @@ struct State {
     /// bookmarks), and its last-fetched result keyed by lowercased name.
     badge_cmd: Option<String>,
     badges: HashMap<String, badges::Badge>,
-    /// Optional command that toggles a workspace's marked state (the `m` key).
-    /// The marks themselves come back through `badge_cmd`, so the app keeps no
-    /// state of its own.
-    mark_cmd: Option<String>,
-    /// Set when `m` is pressed on an unnamed workspace: it opens the rename
-    /// field, and the mark is applied once a name is committed.
-    mark_after_rename: bool,
+    /// The declared kinds of workspace mark, each on its own key. The marks
+    /// themselves come back through `badge_cmd`, so the app keeps no state of
+    /// its own.
+    mark_kinds: Vec<badges::MarkKind>,
+    /// Set when a mark key is pressed on an unnamed workspace: it opens the
+    /// rename field, and that kind's mark is applied once a name is committed.
+    mark_after_rename: Option<usize>,
     /// In-progress pointer drag (freezes refresh so the layout stays put).
     drag: Option<Drag>,
     /// Eased on-screen top-left per workspace id and per column, so neighbours
@@ -289,7 +289,12 @@ fn build_ui(app: &Application, opts: &Opts) {
         .unwrap_or(0);
     let badge_cmd = config::load_badge_command();
     let badges = badge_cmd.as_deref().map(badges::load).unwrap_or_default();
-    let mark_cmd = config::load_mark_toggle_command();
+    // A declared key that collides with a built-in binding is dropped, so a typo
+    // in the config can't shadow navigation.
+    let mark_kinds: Vec<badges::MarkKind> = config::load_mark_kinds()
+        .into_iter()
+        .filter(|k| !RESERVED_KEYS.contains(&k.key))
+        .collect();
     // --solo <name>: start with only that output shown, if it exists.
     let solo = opts
         .solo_monitor
@@ -312,8 +317,8 @@ fn build_ui(app: &Application, opts: &Opts) {
         auto_show: AutoShow::default(),
         badge_cmd,
         badges,
-        mark_cmd,
-        mark_after_rename: false,
+        mark_kinds,
+        mark_after_rename: None,
         drag: None,
         anim_ws: HashMap::new(),
         anim_col: HashMap::new(),
@@ -680,16 +685,17 @@ fn restore_focus((prev_win, prev_ws): (Option<u64>, Option<u64>)) {
 }
 
 /// Commit the rename: set (or unset, if empty) the selected workspace's name
-/// without moving focus, then close the field. When the rename was opened by `m`
-/// on an unnamed workspace, mark it once it has a name.
+/// without moving focus, then close the field. When the rename was opened by a
+/// mark key on an unnamed workspace, mark it once it has a name.
 fn commit_rename(state: &Rc<RefCell<State>>) {
-    let (target, name, mark_after, mark_cmd) = {
+    let (target, name, pending_kind) = {
         let s = state.borrow();
         (
             s.selected_ws_id(),
             s.editing.as_ref().map(|e| e.text()).unwrap_or_default(),
-            s.mark_after_rename,
-            s.mark_cmd.clone(),
+            s.mark_after_rename
+                .and_then(|i| s.mark_kinds.get(i))
+                .cloned(),
         )
     };
     let trimmed = name.trim();
@@ -699,17 +705,15 @@ fn commit_rename(state: &Rc<RefCell<State>>) {
         // user where they were.
         let _ = niri::rename_workspace_by_id(id, trimmed);
     }
-    // If `m` opened this rename on an unnamed workspace, mark it now that it has
-    // a name (skip if it was left empty — nothing to key the mark on).
-    if mark_after && !trimmed.is_empty() {
-        if let Some(cmd) = mark_cmd {
-            badges::toggle(&cmd, trimmed);
-        }
+    // If a mark key opened this rename on an unnamed workspace, mark it now that
+    // it has a name (skip if it was left empty — nothing to key the mark on).
+    if let Some(kind) = pending_kind.filter(|_| !trimmed.is_empty()) {
+        badges::toggle(&kind, trimmed);
     }
     {
         let mut s = state.borrow_mut();
         s.editing = None;
-        s.mark_after_rename = false;
+        s.mark_after_rename = None;
     }
     refresh(state);
 }
@@ -727,7 +731,7 @@ fn handle_edit_key(keyval: &gdk::Key, mods: gdk::ModifierType, state: &Rc<RefCel
     if matches!(*keyval, gdk::Key::Escape) || (ctrl && lc == Some('g')) {
         let mut s = state.borrow_mut();
         s.editing = None;
-        s.mark_after_rename = false;
+        s.mark_after_rename = None;
         return true;
     }
     if matches!(*keyval, gdk::Key::Return | gdk::Key::KP_Enter) {
@@ -901,6 +905,43 @@ fn activate_selection(state: &Rc<RefCell<State>>, app: &Application, keep_overla
     }
 }
 
+/// The map-mode keys the app binds itself. A configured mark kind may not claim
+/// one of these. `m` is absent on purpose: it is the key the single-kind config
+/// shorthand uses, so it belongs to the kinds.
+const RESERVED_KEYS: &[char] = &[
+    'q', 'r', 't', 'f', 's', 'j', 'k', 'J', 'K', 'l', 'h', 'L', 'H', 'x', 'w', '<', '>', '?', '1',
+    '2', '3', '4', '5', '6', '7', '8', '9',
+];
+
+/// Toggle mark kind `i` on the selected workspace. An unnamed workspace has
+/// nothing to key a mark on, so the rename field opens first and the mark waits
+/// for a name. Returns true to request a redraw.
+fn toggle_mark(state: &Rc<RefCell<State>>, i: usize) -> bool {
+    let (kind, name) = {
+        let s = state.borrow();
+        let Some(kind) = s.mark_kinds.get(i).cloned() else {
+            return false;
+        };
+        let name = s
+            .sel_ws()
+            .and_then(|v| v.ws.name.clone())
+            .filter(|n| !n.is_empty());
+        (kind, name)
+    };
+    match name {
+        Some(name) => {
+            badges::toggle(&kind, &name);
+            refresh(state);
+        }
+        None => {
+            let mut s = state.borrow_mut();
+            s.mark_after_rename = Some(i);
+            s.editing = Some(Edit::new(""));
+        }
+    }
+    true
+}
+
 /// Returns true if the key changed something and a redraw is wanted.
 fn handle_key(
     keyval: &gdk::Key,
@@ -938,6 +979,13 @@ fn handle_key(
         }
     }
 
+    // A declared mark kind's key toggles that kind on the selected workspace. A
+    // mark needs a stable name, so on an unnamed workspace this opens the rename
+    // field and marks it once the name is committed.
+    if let Some(i) = ch.and_then(|c| state.borrow().mark_kinds.iter().position(|k| k.key == c)) {
+        return toggle_mark(state, i);
+    }
+
     match (ch, *keyval) {
         (Some('q'), _) | (_, gdk::Key::Escape) => {
             app.quit();
@@ -952,33 +1000,6 @@ fn handle_key(
                 .map(|ws| ws.ws.name.clone().unwrap_or_default());
             if let Some(name) = name {
                 state.borrow_mut().editing = Some(Edit::new(&name));
-            }
-            true
-        }
-        // Toggle the selected workspace's marked state via the configured
-        // command. A mark needs a stable name, so on an unnamed workspace this
-        // opens the rename field and marks it once the name is committed.
-        (Some('m'), _) => {
-            let (cmd, name) = {
-                let s = state.borrow();
-                (
-                    s.mark_cmd.clone(),
-                    s.sel_ws()
-                        .and_then(|v| v.ws.name.clone())
-                        .filter(|n| !n.is_empty()),
-                )
-            };
-            let Some(cmd) = cmd else { return false };
-            match name {
-                Some(name) => {
-                    badges::toggle(&cmd, &name);
-                    refresh(state);
-                }
-                None => {
-                    let mut s = state.borrow_mut();
-                    s.mark_after_rename = true;
-                    s.editing = Some(Edit::new(""));
-                }
             }
             true
         }
@@ -1734,7 +1755,7 @@ fn draw(cr: &gtk::cairo::Context, w: f64, h: f64, state: &State) {
     } else if let Some(edit) = &state.editing {
         draw_rename(cr, w, h, edit, t);
     } else if state.show_help {
-        draw_help(cr, w, h, t);
+        draw_help(cr, w, h, t, &state.mark_kinds);
     } else if state.active {
         // The hint is interaction guidance; hide it on the passive map too.
         draw_hint(cr, w, h, t, hint_offset);
@@ -2125,33 +2146,39 @@ fn draw_window(
 
 /// The grouped key legend shown when `?` is pressed. Each group holds its
 /// actions one per entry, so they can be spread over as many lines as the panel
-/// needs.
-fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
+/// needs. The mark kinds come from the config, so each contributes a row naming
+/// its key and its kind.
+fn key_legend(mark_kinds: &[badges::MarkKind]) -> [(&'static str, Vec<String>); 3] {
+    let mut workspace: Vec<String> = [
+        "j/k or Down/Up prev/next",
+        "1-9 jump to index",
+        "<> first/last",
+        "Shift+J/K reorder",
+        "Shift+H/L to screen",
+        "r rename",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
+    workspace.extend(mark_kinds.iter().map(|k| format!("{} {}", k.key, k.name)));
+    workspace.push("w kill".to_string());
+
     [
-        (
-            "Workspace",
-            &[
-                "j/k or Down/Up prev/next",
-                "1-9 jump to index",
-                "<> first/last",
-                "Shift+J/K reorder",
-                "Shift+H/L to screen",
-                "r rename",
-                "m mark",
-                "w kill",
-            ],
-        ),
+        ("Workspace", workspace),
         (
             "Window",
-            &[
+            [
                 "h/l or Left/Right prev/next",
                 "Ctrl+H/L move column",
                 "x kill",
-            ],
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         ),
         (
             "General",
-            &[
+            [
                 "Tab/Shift+Tab switch screen",
                 "s solo screen",
                 "f auto-show",
@@ -2160,14 +2187,17 @@ fn key_legend() -> [(&'static str, &'static [&'static str]); 3] {
                 "t theme",
                 "? keys",
                 "q/Esc quit",
-            ],
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         ),
     ]
 }
 
 /// Pack `items` into lines joined by " · ", each line at most `max_w` wide.
 /// An item wider than `max_w` gets a line of its own.
-fn wrap_items(cr: &gtk::cairo::Context, font: Font, items: &[&str], max_w: f64) -> Vec<String> {
+fn wrap_items(cr: &gtk::cairo::Context, font: Font, items: &[String], max_w: f64) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for item in items {
         match lines.last_mut() {
@@ -2176,10 +2206,10 @@ fn wrap_items(cr: &gtk::cairo::Context, font: Font, items: &[&str], max_w: f64) 
                 if text_width(cr, font, &candidate) <= max_w {
                     *line = candidate;
                 } else {
-                    lines.push((*item).to_string());
+                    lines.push(item.clone());
                 }
             }
-            None => lines.push((*item).to_string()),
+            None => lines.push(item.clone()),
         }
     }
     lines
@@ -2214,8 +2244,14 @@ fn draw_auto_show_pill(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) -> f
 }
 
 /// The key legend as a centered panel (toggled with `?`), grouped by target.
-fn draw_help(cr: &gtk::cairo::Context, w: f64, h: f64, t: &Theme) {
-    let rows = key_legend();
+fn draw_help(
+    cr: &gtk::cairo::Context,
+    w: f64,
+    h: f64,
+    t: &Theme,
+    mark_kinds: &[badges::MarkKind],
+) {
+    let rows = key_legend(mark_kinds);
 
     set_rgba(cr, 0.0, 0.0, 0.0, 0.45);
     cr.rectangle(0.0, 0.0, w, h);

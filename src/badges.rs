@@ -7,10 +7,15 @@
 //! `bookmarks.kdl`), but the app itself knows nothing about bookmarks — anyone
 //! can point the command at whatever notion of "marked workspace" they have.
 //!
-//! [`toggle`] is the write half of the same idea: a second command flips a
-//! workspace's marked state in its own store, which the read command above then
-//! reports back as a pill. The app still owns no state — it only invokes the
-//! command on the selected workspace.
+//! [`toggle`] is the write half of the same idea: a command flips a workspace's
+//! marked state in its own store, which the read command above then reports back
+//! as a pill. The app still owns no state — it only invokes the command on the
+//! selected workspace.
+//!
+//! Marks come in [`MarkKind`]s, declared in the config. A kind is a name, the key
+//! that toggles it and the command that owns its store, and that is all the app
+//! knows about it: what a kind *means*, and whether two kinds exclude each other,
+//! lives in the command.
 
 use crate::theme::{self, Rgb};
 use std::collections::HashMap;
@@ -51,15 +56,29 @@ pub fn load(command: &str) -> HashMap<String, Badge> {
     map
 }
 
-/// Run the mark-toggle command (through `sh -c`) to flip `workspace`'s marked
-/// state. The workspace name is passed in the `NIRI_GROOM_WORKSPACE` environment
-/// variable; the command decides what "marked" means and where it's stored. The
-/// call blocks until the command exits so a following refresh sees the new
-/// state. Any failure is ignored — marks are decorative.
-pub fn toggle(command: &str, workspace: &str) {
+/// One declared kind of workspace mark.
+#[derive(Clone)]
+pub struct MarkKind {
+    /// Label for the key legend, and what the command receives in
+    /// `NIRI_GROOM_MARK_KIND`.
+    pub name: String,
+    /// The key that toggles this kind on the selected workspace.
+    pub key: char,
+    /// The command that owns this kind's store.
+    pub command: String,
+}
+
+/// Run `kind`'s toggle command (through `sh -c`) to flip `workspace`'s mark of
+/// that kind. The workspace name is passed in `NIRI_GROOM_WORKSPACE` and the
+/// kind's name in `NIRI_GROOM_MARK_KIND`; the command decides what "marked"
+/// means and where it's stored. The call blocks until the command exits so a
+/// following refresh sees the new state. Any failure is ignored — marks are
+/// decorative.
+pub fn toggle(kind: &MarkKind, workspace: &str) {
     let _ = Command::new("sh")
         .arg("-c")
-        .arg(command)
+        .arg(&kind.command)
         .env("NIRI_GROOM_WORKSPACE", workspace)
+        .env("NIRI_GROOM_MARK_KIND", &kind.name)
         .status();
 }

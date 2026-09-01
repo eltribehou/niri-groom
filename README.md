@@ -21,6 +21,7 @@ whole workspace or a single window from the keyboard, instantly.
 | `f`             | **Auto-show** (toggle) — niri's focus follows the selection as you navigate |
 | `Enter`         | **Focus** the selected window (closes the overlay only if it's on the overlay's monitor) |
 | `r`             | **Rename** the selected workspace (inline field, readline/Emacs keys) |
+| a mark key      | Toggle a kind of **mark** on the selected workspace (see below) |
 | `t`             | Open the **theme** picker (live preview; Enter saves, Esc cancels) |
 | `?`             | Toggle the **key legend** (hidden by default) |
 | `w`             | Kill the selected workspace (all its windows) |
@@ -61,6 +62,33 @@ catppuccin-mocha):
 ```kdl
 theme "catppuccin-mocha"
 ```
+
+## Workspace marks
+
+A **mark** flags a workspace with a small pill, and niri-groom deliberately does
+not decide what a mark means. Declare the kinds you want, each with a key and a
+command that owns its store:
+
+```kdl
+// Read the marks back and draw the pills: one tab-separated line per flagged
+// workspace, `<name>\t<label>[\t#rrggbb]`.
+workspace-badges command="~/.config/niri/scripts/niri-groom-badges.sh"
+
+// Toggle a mark. The key runs the command with the workspace name in
+// $NIRI_GROOM_WORKSPACE and the kind name in $NIRI_GROOM_MARK_KIND.
+mark-kind "work"     key="m" command="~/.config/niri/scripts/niri-groom-mark-toggle.sh"
+mark-kind "personal" key="p" command="~/.config/niri/scripts/niri-groom-mark-toggle.sh"
+```
+
+Kinds may share one command, which is how a single script can own several stores
+and keep them mutually exclusive if you want that. A kind's name shows beside its
+key in the `?` legend; a key that collides with a built-in binding is ignored. On
+an unnamed workspace a mark key opens the rename field first, since marks are
+keyed by workspace name.
+
+Bind the same script to a niri key and the overlay and the compositor share one
+source of truth. Touching `$XDG_RUNTIME_DIR/niri-groom-refresh` makes every
+running overlay re-read the marks at once.
 
 ## Build from source
 
