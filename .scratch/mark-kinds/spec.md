@@ -55,9 +55,9 @@ recorded in `docs/adr/0001-mark-kinds-are-configuration.md`.
 ## Rendering
 
 Nothing changes. The badges command already merges every source into one pill
-per workspace, and exclusivity means a workspace never needs two. Personal
-workspaces are told apart by the pill's glyph and color, both chosen in the
-badges script: `🏠` and gruvbox-material aqua `#7daea3`, against `⭐` and green
+per workspace, and exclusivity means a workspace never needs two. Every kind
+uses the same `⭐`, and the pill's color is what tells them apart — both chosen
+in the badges script: gruvbox-material aqua `#7daea3` for personal against green
 `#a9b665` for work. Single-codepoint glyphs only — the monochrome forcing breaks
 multi-codepoint sequences.
 
