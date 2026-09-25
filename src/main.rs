@@ -561,6 +561,14 @@ fn build_ui(app: &Application, opts: &Opts) {
                     let (nav, win_idx) = s.focused_nav_and_win();
                     s.sel_nav = nav;
                     s.sel_win = win_idx;
+                    // The user moved niri's focus by hand while away, so this
+                    // is where it sits. Auto-show's guard has to know, or the
+                    // target it last sent still counts as focused and a later
+                    // return to it (say, the neighbour a kill falls back to)
+                    // is dropped as redundant.
+                    if let Some(target) = target_for(s.selected_win_id(), s.selected_ws_id()) {
+                        s.auto_show.record_sent(target);
+                    }
                 }
                 s.became_inactive_at = None;
             } else {

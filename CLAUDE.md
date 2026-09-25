@@ -130,10 +130,14 @@ a map being browsed fast. Focus stays on the last previewed target when the mode
 switched off or the overlay quits; nothing is restored.
 
 A focus the mode didn't make is recorded too (`AutoShow::record_sent`, called from
-`activate_selection`), so `Enter` and the second-click path keep the guard matching
-niri. Without it, a target focused by hand looks unfocused to the guard and the next
-navigation back to it would be dropped as redundant, leaving the accent border and
-niri's focus on different windows.
+`activate_selection` and from the snap that runs when the overlay regains the
+keyboard after a real absence), so `Enter`, the second-click path and work done by
+hand on another screen keep the guard matching niri. Without it, a target focused
+by hand looks unfocused to the guard and the next navigation back to it would be
+dropped as redundant, leaving the accent border and niri's focus on different
+windows. The kill fallback is the visible case: the workspace above the killed one
+had been previewed earlier, the user then created the doomed workspace by hand, and
+without the re-seed its neighbour was dropped as "already focused".
 
 The move actions (`Shift+J`/`K`, `Shift+H`/`L`, `Ctrl+H`/`L`, pointer drops) end
 with `keep_grab_under_auto_show()` while the mode is on: their `restore_focus` puts
