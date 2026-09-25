@@ -363,6 +363,15 @@ stale selection competing for attention. This is driven by GTK's
 `Window::is_active` (`State::active`); in the focused grooming flow it's always
 active, so nothing changes there.
 
+Regaining the keyboard after a real absence (over 400 ms, so not one of my own
+`focus-monitor` blips) **snaps** the selection to where the user was looking
+(`Model::snap_selection`). niri's focused workspace answers that only when it sits
+on another output; when the overlay regains the keyboard the focus is on its own
+output, on the overlay itself, and the workspace under it is never where anyone
+was working. Then the answer is the *active* workspace of the mapped output: the
+soloed one, or the single other output. With more outputs than that the selection
+is left alone. The snap also re-seeds auto-show's guard with the target it lands on.
+
 It's single-instance: `GApplication` (the default unique behaviour, keyed on the
 app id) forwards a second launch's `activate` to the running instance and the
 second process exits. The `activate` handler (`build_ui`) guards on

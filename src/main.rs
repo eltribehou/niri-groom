@@ -558,16 +558,24 @@ fn build_ui(app: &Application, opts: &Opts) {
                     .map(|t| t.elapsed().as_millis() > 400)
                     .unwrap_or(true);
                 if was_inactive_long {
-                    let (nav, win_idx) = s.focused_nav_and_win();
-                    s.sel_nav = nav;
-                    s.sel_win = win_idx;
-                    // The user moved niri's focus by hand while away, so this
-                    // is where it sits. Auto-show's guard has to know, or the
-                    // target it last sent still counts as focused and a later
-                    // return to it (say, the neighbour a kill falls back to)
-                    // is dropped as redundant.
-                    if let Some(target) = target_for(s.selected_win_id(), s.selected_ws_id()) {
-                        s.auto_show.record_sent(target);
+                    let overlay = window_output(win.upcast_ref());
+                    if let Some((nav, win_idx)) =
+                        s.model.snap_selection(overlay.as_deref(), s.solo)
+                    {
+                        // Landing on the workspace already selected keeps the
+                        // window the user had picked in it.
+                        if nav != s.sel_nav {
+                            s.sel_win = win_idx;
+                        }
+                        s.sel_nav = nav;
+                        // The user moved niri's focus by hand while away, so
+                        // this is where it sits. Auto-show's guard has to know,
+                        // or the target it last sent still counts as focused
+                        // and a later return to it (say, the neighbour a kill
+                        // falls back to) is dropped as redundant.
+                        if let Some(target) = target_for(s.selected_win_id(), s.selected_ws_id()) {
+                            s.auto_show.record_sent(target);
+                        }
                     }
                 }
                 s.became_inactive_at = None;
@@ -818,9 +826,13 @@ fn handle_edit_key(keyval: &gdk::Key, mods: gdk::ModifierType, state: &Rc<RefCel
 /// The connector name (e.g. "HDMI-A-1") of the monitor the overlay is on, to
 /// compare against a target workspace's output.
 fn overlay_output(app: &Application) -> Option<String> {
-    let window = app.windows().into_iter().next()?;
+    window_output(&app.windows().into_iter().next()?)
+}
+
+/// The connector of the monitor under `window`'s surface.
+fn window_output(window: &gtk::Window) -> Option<String> {
     let surface = window.surface()?;
-    let display = gtk::prelude::WidgetExt::display(&window);
+    let display = gtk::prelude::WidgetExt::display(window);
     let monitor = display.monitor_at_surface(&surface)?;
     monitor.connector().map(|s| s.to_string())
 }

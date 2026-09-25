@@ -45,6 +45,51 @@ impl Model {
             Target::Workspace(id) => workspaces.any(|v| v.ws.id == id),
         }
     }
+
+    /// Where the selection lands when the overlay regains the keyboard: the
+    /// nav index of the workspace the user was last looking at, and the index of
+    /// its focused window (0 when none is).
+    ///
+    /// niri's focused workspace tells that only when it sits on another output;
+    /// on the overlay's own output the focus is the overlay itself. In that case
+    /// the answer is the active workspace of the mapped output: the soloed one,
+    /// or the single other output. With more outputs than that there is nothing
+    /// to go on, and `None` says to keep the current selection.
+    pub fn snap_selection(
+        &self,
+        overlay_output: Option<&str>,
+        solo: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let ws_at = |nav_idx: usize| {
+            let (o, w) = self.nav[nav_idx];
+            &self.outputs[o].workspaces[w]
+        };
+        let window_of = |nav_idx: usize| {
+            ws_at(nav_idx)
+                .windows
+                .iter()
+                .position(|win| win.is_focused)
+                .unwrap_or(0)
+        };
+        let on_overlay = |o: usize| Some(self.outputs[o].name.as_str()) == overlay_output;
+
+        if let Some(nav_idx) = (0..self.nav.len())
+            .find(|&i| ws_at(i).ws.is_focused && !on_overlay(self.nav[i].0))
+        {
+            return Some((nav_idx, window_of(nav_idx)));
+        }
+
+        let mapped = solo.or_else(|| {
+            let others: Vec<usize> = (0..self.outputs.len()).filter(|&o| !on_overlay(o)).collect();
+            match others[..] {
+                [o] => Some(o),
+                _ => None,
+            }
+        })?;
+        let nav_idx =
+            (0..self.nav.len()).find(|&i| self.nav[i].0 == mapped && ws_at(i).ws.is_active)?;
+        Some((nav_idx, window_of(nav_idx)))
+    }
 }
 
 /// Where `delta` steps of workspace navigation land, as an index into `nav`.
@@ -230,6 +275,26 @@ pub mod fixtures {
             self
         }
 
+        /// Mark the workspace declared last as the one shown on its output.
+        pub fn active(mut self) -> Self {
+            self.workspaces.last_mut().expect("declare a workspace first").is_active = true;
+            self
+        }
+
+        /// Mark the workspace declared last as niri's focused one (and shown).
+        pub fn focused(mut self) -> Self {
+            let ws = self.workspaces.last_mut().expect("declare a workspace first");
+            ws.is_active = true;
+            ws.is_focused = true;
+            self
+        }
+
+        /// Mark the window declared last as niri's focused window.
+        pub fn focused_window(mut self) -> Self {
+            self.windows.last_mut().expect("declare a window first").is_focused = true;
+            self
+        }
+
         /// A window at `(column, row)` of the scrolling layout, in the
         /// workspace declared last.
         pub fn window(mut self, id: u64, column: i64, row: i64) -> Self {
@@ -386,5 +451,69 @@ mod tests {
         assert_eq!(step_win(3, 2, 1), 2);
         assert_eq!(step_win(3, 0, -1), 0);
         assert_eq!(step_win(0, 0, 1), 0);
+    }
+
+    #[test]
+    fn regaining_the_keyboard_snaps_to_a_focus_on_another_screen() {
+        // The overlay sits on eDP-1 over a terminal; niri's focus is the second
+        // window of `pkg` on HDMI-A-1.
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(25, 1, None)
+            .window(252, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(3, 1, Some("chat"))
+            .window(30, 1, 1)
+            .workspace(5, 2, Some("pkg"))
+            .focused()
+            .window(50, 1, 1)
+            .window(51, 2, 1)
+            .focused_window()
+            .build();
+        let (nav, win) = model.snap_selection(Some("eDP-1"), None).unwrap();
+        assert_eq!(model.nav[nav], (1, 1));
+        assert_eq!(win, 1);
+    }
+
+    #[test]
+    fn a_focus_on_the_overlay_itself_yields_the_mapped_screens_shown_workspace() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(25, 1, None)
+            .focused()
+            .window(252, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(3, 1, Some("chat"))
+            .window(30, 1, 1)
+            .workspace(5, 2, Some("pkg"))
+            .active()
+            .window(50, 1, 1)
+            .build();
+        let hdmi = 1;
+        for solo in [Some(hdmi), None] {
+            let (nav, win) = model.snap_selection(Some("eDP-1"), solo).unwrap();
+            assert_eq!(model.nav[nav], (hdmi, 1), "solo={solo:?}");
+            assert_eq!(win, 0);
+        }
+    }
+
+    #[test]
+    fn with_several_other_screens_and_no_solo_the_selection_is_kept() {
+        let model = Snapshot::new()
+            .output("eDP-1", 0.0, 1920.0)
+            .workspace(25, 1, None)
+            .focused()
+            .window(252, 1, 1)
+            .output("HDMI-A-1", 1920.0, 2560.0)
+            .workspace(3, 1, Some("chat"))
+            .active()
+            .window(30, 1, 1)
+            .output("DP-1", 4480.0, 2560.0)
+            .workspace(7, 1, Some("mail"))
+            .active()
+            .window(70, 1, 1)
+            .build();
+        assert_eq!(model.snap_selection(Some("eDP-1"), None), None);
+        assert_eq!(model.snap_selection(Some("eDP-1"), Some(2)).map(|(n, _)| model.nav[n]), Some((2, 0)));
     }
 }
