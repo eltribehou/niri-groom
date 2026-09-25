@@ -40,6 +40,20 @@ use std::io::BufRead;
 use std::rc::Rc;
 use std::time::Duration;
 
+/// Append a line to the file named by `NIRI_GROOM_TRACE`, when that variable is
+/// set. The message is built lazily so an unset variable costs nothing.
+fn trace(msg: impl FnOnce() -> String) {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    let Some(path) = PATH.get_or_init(|| std::env::var_os("NIRI_GROOM_TRACE").map(Into::into)) else {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = writeln!(f, "{:?} {}", std::time::SystemTime::now(), msg());
+    }
+}
+
 struct State {
     model: Model,
     /// Index into `model.nav` — the currently selected workspace.
@@ -830,7 +844,9 @@ fn queue_auto_show(state: &Rc<RefCell<State>>, app: &Application) {
         let Some(target) = target_for(s.selected_win_id(), s.selected_ws_id()) else {
             return;
         };
-        s.auto_show.queue(target)
+        let arm = s.auto_show.queue(target);
+        trace(|| format!("queue {target:?} -> arm={arm}"));
+        arm
     };
     if arm {
         let state = state.clone();
@@ -850,6 +866,16 @@ fn sync_from_niri(state: &Rc<RefCell<State>>, app: &Application) {
     refresh(state);
     let settled = {
         let mut s = state.borrow_mut();
+        trace(|| {
+            format!(
+                "sync: killed={:?} contains={:?} sel_ws={:?} sel_win={:?} on={}",
+                s.auto_show.killed(),
+                s.auto_show.killed().map(|t| s.model.contains(t)),
+                s.selected_ws_id(),
+                s.selected_win_id(),
+                s.auto_show.is_on()
+            )
+        });
         match s.auto_show.killed() {
             Some(target) if !s.model.contains(target) => {
                 s.auto_show.kill_settled();
@@ -870,14 +896,11 @@ fn preview_selection(state: &Rc<RefCell<State>>, app: &Application) {
     let Some(target) = state.borrow_mut().auto_show.take_due() else {
         return;
     };
-    match target {
-        Target::Window(id) => {
-            let _ = niri::focus_window(id);
-        }
-        Target::Workspace(id) => {
-            let _ = niri::focus_workspace_by_id(id);
-        }
-    }
+    let result = match target {
+        Target::Window(id) => niri::focus_window(id),
+        Target::Workspace(id) => niri::focus_workspace_by_id(id),
+    };
+    trace(|| format!("preview {target:?} -> {result:?}"));
     regrab_keyboard(app);
 }
 
@@ -1107,11 +1130,14 @@ fn handle_key(
                     None => (None, Vec::new(), None),
                 }
             };
+            trace(|| format!("kill ws {ws_id:?} name={name:?} windows={ids:?}"));
             for id in ids {
-                let _ = niri::close_window(id);
+                let r = niri::close_window(id);
+                trace(|| format!("close-window {id} -> {r:?}"));
             }
             if let Some(name) = name.filter(|n| !n.is_empty()) {
-                let _ = niri::unset_workspace_name(&name);
+                let r = niri::unset_workspace_name(&name);
+                trace(|| format!("unset-workspace-name {name} -> {r:?}"));
             }
             if let Some(id) = ws_id {
                 state.borrow_mut().auto_show.follow_kill(Target::Workspace(id));
