@@ -605,9 +605,10 @@ fn build_ui(app: &Application, opts: &Opts) {
 
         let state = state.clone();
         let area = area.clone();
+        let app = app.clone();
         glib::spawn_future_local(async move {
             while rx.recv().await.is_ok() {
-                refresh(&state);
+                sync_from_niri(&state, &app);
                 area.queue_draw();
             }
         });
@@ -618,8 +619,9 @@ fn build_ui(app: &Application, opts: &Opts) {
     {
         let state = state.clone();
         let area = area.clone();
+        let app = app.clone();
         glib::timeout_add_local(Duration::from_millis(2000), move || {
-            refresh(&state);
+            sync_from_niri(&state, &app);
             area.queue_draw();
             glib::ControlFlow::Continue
         });
@@ -642,8 +644,9 @@ fn build_ui(app: &Application, opts: &Opts) {
         {
             let state = state.clone();
             let area = area.clone();
+            let app = app.clone();
             monitor.connect_changed(move |_, _, _, _| {
-                refresh(&state);
+                sync_from_niri(&state, &app);
                 area.queue_draw();
             });
             // Keep the monitor alive for the whole process; dropping it stops
@@ -835,6 +838,28 @@ fn queue_auto_show(state: &Rc<RefCell<State>>, app: &Application) {
         glib::timeout_add_local_once(AUTO_SHOW_DEBOUNCE, move || {
             preview_selection(&state, &app);
         });
+    }
+}
+
+/// Refresh the map from niri, then let auto-show follow a kill: once the killed
+/// window or workspace has left the map, the selection that took its place is
+/// previewed as if navigated to. The wait matters because closing is
+/// asynchronous: right after the kill the map still shows the dying item, and a
+/// selection clamped inside it would preview the wrong thing.
+fn sync_from_niri(state: &Rc<RefCell<State>>, app: &Application) {
+    refresh(state);
+    let settled = {
+        let mut s = state.borrow_mut();
+        match s.auto_show.killed() {
+            Some(target) if !s.model.contains(target) => {
+                s.auto_show.kill_settled();
+                true
+            }
+            _ => false,
+        }
+    };
+    if settled {
+        queue_auto_show(state, app);
     }
 }
 
@@ -1063,18 +1088,23 @@ fn handle_key(
             let id = state.borrow().selected_win_id();
             if let Some(id) = id {
                 let _ = niri::close_window(id);
-                refresh(state);
+                state.borrow_mut().auto_show.follow_kill(Target::Window(id));
+                sync_from_niri(state, app);
             }
             true
         }
         // Kill the whole selected workspace: close every window, then drop the
         // workspace name so niri reclaims the now-empty workspace.
         (Some('w'), _) => {
-            let (ids, name): (Vec<u64>, Option<String>) = {
+            let (ws_id, ids, name): (Option<u64>, Vec<u64>, Option<String>) = {
                 let s = state.borrow();
                 match s.sel_ws() {
-                    Some(v) => (v.windows.iter().map(|w| w.id).collect(), v.ws.name.clone()),
-                    None => (Vec::new(), None),
+                    Some(v) => (
+                        Some(v.ws.id),
+                        v.windows.iter().map(|w| w.id).collect(),
+                        v.ws.name.clone(),
+                    ),
+                    None => (None, Vec::new(), None),
                 }
             };
             for id in ids {
@@ -1083,7 +1113,10 @@ fn handle_key(
             if let Some(name) = name.filter(|n| !n.is_empty()) {
                 let _ = niri::unset_workspace_name(&name);
             }
-            refresh(state);
+            if let Some(id) = ws_id {
+                state.borrow_mut().auto_show.follow_kill(Target::Workspace(id));
+            }
+            sync_from_niri(state, app);
             true
         }
         // 1–9: jump to the workspace with that niri index on the current output.

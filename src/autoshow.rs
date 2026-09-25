@@ -26,12 +26,17 @@ pub fn target_for(win_id: Option<u64>, ws_id: Option<u64>) -> Option<Target> {
 /// waiting for the debounce to elapse; `scheduled` says a timer is in flight, so
 /// navigating repeatedly arms only one. `scheduled` tracks the timer itself and so
 /// outlives a disable, which keeps a re-enable from arming a second one.
+///
+/// `killed` is a target a kill is removing. Closing is asynchronous, so the map
+/// keeps showing it for a moment; once it is gone the selection the map fell back
+/// to is previewed like a navigation step.
 #[derive(Default)]
 pub struct AutoShow {
     on: bool,
     last_sent: Option<Target>,
     pending: Option<Target>,
     scheduled: bool,
+    killed: Option<Target>,
 }
 
 impl AutoShow {
@@ -46,6 +51,7 @@ impl AutoShow {
         self.on = true;
         self.last_sent = focused;
         self.pending = None;
+        self.killed = None;
     }
 
     /// Disarm the mode and drop anything waiting. A timer that is already running
@@ -54,6 +60,7 @@ impl AutoShow {
         self.on = false;
         self.last_sent = None;
         self.pending = None;
+        self.killed = None;
     }
 
     /// Offer the selection's target. Returns true when the caller should start a
@@ -64,6 +71,8 @@ impl AutoShow {
         if !self.on {
             return false;
         }
+        // A selection made by hand supersedes the one a kill will leave behind.
+        self.killed = None;
         if Some(target) == self.last_sent {
             self.pending = None;
             return false;
@@ -87,6 +96,24 @@ impl AutoShow {
         }
         self.last_sent = Some(target);
         Some(target)
+    }
+
+    /// Remember the target a kill is removing, so the selection that replaces it
+    /// gets previewed once it has left the map.
+    pub fn follow_kill(&mut self, target: Target) {
+        if self.on {
+            self.killed = Some(target);
+        }
+    }
+
+    /// The target whose disappearance is awaited, if any.
+    pub fn killed(&self) -> Option<Target> {
+        self.killed
+    }
+
+    /// The killed target has left the map; stop waiting for it.
+    pub fn kill_settled(&mut self) {
+        self.killed = None;
     }
 
     /// Record a target that something else focused, so the guard keeps matching
@@ -227,6 +254,37 @@ mod tests {
         a.enable(Some(Target::Window(1)));
         assert!(a.queue(Target::Window(5)));
         assert_eq!(a.take_due(), Some(Target::Window(5)));
+    }
+
+    #[test]
+    fn a_kill_is_followed_only_while_the_mode_is_on() {
+        let mut a = AutoShow::default();
+        a.follow_kill(Target::Workspace(3));
+        assert_eq!(a.killed(), None);
+        a.enable(None);
+        a.follow_kill(Target::Workspace(3));
+        assert_eq!(a.killed(), Some(Target::Workspace(3)));
+        a.kill_settled();
+        assert_eq!(a.killed(), None);
+    }
+
+    #[test]
+    fn navigating_by_hand_supersedes_a_pending_kill() {
+        let mut a = AutoShow::default();
+        a.enable(None);
+        a.follow_kill(Target::Workspace(3));
+        a.queue(Target::Workspace(4));
+        assert_eq!(a.killed(), None);
+    }
+
+    #[test]
+    fn disabling_drops_a_pending_kill() {
+        let mut a = AutoShow::default();
+        a.enable(None);
+        a.follow_kill(Target::Window(3));
+        a.disable();
+        a.enable(None);
+        assert_eq!(a.killed(), None);
     }
 
     #[test]

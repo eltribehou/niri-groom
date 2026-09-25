@@ -108,9 +108,13 @@ Only navigation focuses anything: `j`/`k`, `h`/`l`, `1`–`9`, `<`/`>`, `Tab` (a
 routed through `navigated()`), plus a pointer click that changed the selection.
 Because `hit_select()` runs on press with `drag` already armed, that click case
 lives in `drag_end` and fires only when no drag happened. Selection changes that
-come out of a refresh never focus anything — not the clamp after a kill, not the
-snap to niri's focus when the overlay regains the keyboard — which keeps the rule
-to one sentence and leaves niri's own focus-after-close behaviour alone.
+come out of a refresh never focus anything — the snap to niri's focus when the
+overlay regains the keyboard stays silent — with one exception: a kill (`x`/`w`).
+The handler records the killed target (`AutoShow::follow_kill`) and every refresh
+goes through `sync_from_niri`, which waits until that target has left the map
+(closing is asynchronous, so the dying item lingers for a moment) and then
+previews whatever the selection fell back to. A manual navigation in the meantime
+supersedes it.
 
 The target is whatever the map highlights, so after a `j`/`k` step it's the
 workspace's first window (`move_ws` resets `sel_win`); an empty workspace falls

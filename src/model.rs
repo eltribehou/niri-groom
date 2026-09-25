@@ -2,6 +2,7 @@
 //! windows in each workspace, built from a niri snapshot.
 
 use crate::niri;
+use crate::autoshow::Target;
 use std::collections::BTreeMap;
 
 /// A workspace together with the windows it holds (sorted by column, then row).
@@ -27,6 +28,23 @@ pub struct Model {
     pub outputs: Vec<OutputView>,
     /// `(output index, workspace index within output)` in display order.
     pub nav: Vec<(usize, usize)>,
+}
+
+impl Model {
+    /// Whether the map still shows `target`: a window anywhere in it, or a
+    /// workspace in the navigation order.
+    pub fn contains(&self, target: Target) -> bool {
+        let mut workspaces = self
+            .nav
+            .iter()
+            .map(|&(o, w)| &self.outputs[o].workspaces[w]);
+        match target {
+            Target::Window(id) => {
+                workspaces.flat_map(|v| v.windows.iter()).any(|w| w.id == id)
+            }
+            Target::Workspace(id) => workspaces.any(|v| v.ws.id == id),
+        }
+    }
 }
 
 /// Where `delta` steps of workspace navigation land, as an index into `nav`.
