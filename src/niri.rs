@@ -15,8 +15,6 @@ pub struct Workspace {
     pub is_active: bool,
     #[serde(default)]
     pub is_focused: bool,
-    #[serde(default)]
-    pub is_urgent: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -37,8 +35,6 @@ pub struct Window {
     #[serde(default)]
     #[allow(dead_code)]
     pub is_floating: bool,
-    #[serde(default)]
-    pub is_urgent: bool,
     #[serde(default)]
     pub layout: Option<Layout>,
 }

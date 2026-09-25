@@ -1970,9 +1970,7 @@ fn draw_workspace_chrome(
         }
     }
 
-    if wsv.ws.is_urgent {
-        set(cr, t.urgent, 1.0);
-    } else if selected {
+    if selected {
         set(cr, t.accent, 1.0);
     } else {
         set(cr, t.text, 0.95);
@@ -2085,10 +2083,7 @@ fn draw_window(
     let _ = cr.fill();
 
     // Border.
-    if win.is_urgent {
-        set(cr, t.urgent, 1.0);
-        cr.set_line_width(1.8);
-    } else if selected {
+    if selected {
         set(cr, t.accent, 1.0);
         cr.set_line_width(2.0);
     } else {
